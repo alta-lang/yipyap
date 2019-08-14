@@ -1,0 +1,5 @@
+import "./objects.alta" as YAML
+
+export function parse(): YAML.Node {
+
+}
