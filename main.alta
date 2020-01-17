@@ -1,1 +1,2 @@
-export parse from "lib/parser.alta"
+export * from "lib/parser.alta"
+export * from "lib/objects.alta"

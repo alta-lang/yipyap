@@ -1,0 +1,159 @@
+import Map from "map"
+import Vector from "vector"
+import String as AltaString from "string"
+import Box from "memory"
+import Size from "types"
+import escape from "util.alta"
+
+function spacesFor(indent: Size): AltaString {
+  let result: AltaString
+
+  for i: Size in 0..indent {
+    result += ' '
+  }
+
+  return result
+}
+
+export class Node {
+  protected @virtual function equals(other: ref Node): bool {
+    return true
+  }
+  public @virtual function toString(indent: Size): AltaString {
+    return ""
+  }
+  public function toString(): AltaString {
+    return this.toString(0)
+  }
+
+  public this == ref Node: bool {
+    return this.equals($)
+  }
+  public this != ref Node: bool {
+    return !(this == $)
+  }
+}
+
+export class NodeBox extends Box<Node> {
+  public constructor() {
+    super()
+  }
+  public @from constructor(pointer: ptr Node) {
+    super(pointer)
+  }
+  public @from constructor(pointer: ref Node) {
+    super(pointer)
+  }
+  public @copy constructor(other: ref NodeBox) {
+    super(other)
+  }
+
+  public this == NodeBox: bool {
+    # check to see if the Boxes are valid before using them
+    if this as bool != $ as bool
+      return false
+    if !this
+      return true
+
+    # they're valid; go ahead and compare
+    return this as ref Node == $ as ref Node
+  }
+  public this == ref Node: bool {
+    return this as ref Node == $
+  }
+
+  public this != NodeBox: bool {
+    return !(this == $)
+  }
+  public this != ref Node: bool {
+    return !(this == $)
+  }
+}
+
+export class Mapping extends Node, Map<NodeBox, NodeBox> {
+  protected @override function equals(other: ref Node): bool {
+    if !(other instanceof Mapping)
+      return false
+
+    let that = other as ref Mapping
+
+    if this.keys.length != that.keys.length
+      return false
+
+    for key: NodeBox in this.keys.items {
+      if !that.has(key)
+        return false
+      if this[key] != that[key]
+        return false
+    }
+
+    return true
+  }
+  public @override function toString(indent: Size): AltaString {
+    let result: AltaString
+    let spaces = spacesFor(indent)
+
+    result += "!!map {\n"
+
+    for key: NodeBox in this.keys.items {
+      result += spaces + "  ? "
+      result += (key as ref Node).toString(indent + 4) + '\n'
+      result += spaces + "  : "
+      result += (this[key] as ref Node).toString(indent + 4) + ",\n"
+    }
+
+    result += spaces + "}"
+
+    return result
+  }
+}
+
+export class Sequence extends Node, Vector<NodeBox> {
+  protected @override function equals(other: ref Node): bool {
+    if !(other instanceof Sequence)
+      return false
+
+    let that = other as ref Sequence
+
+    if this.length != that.length
+      return false
+
+    for i: Size in 0..this.length {
+      if this[i] != that[i]
+        return false
+    }
+
+    return true
+  }
+  public @override function toString(indent: Size): AltaString {
+    let result: AltaString
+    let spaces = spacesFor(indent)
+
+    result += "!!seq [\n"
+
+    for item: NodeBox in this.items {
+      result += spaces + "  " + (item as ref Node).toString(indent + 2) + ",\n"
+    }
+
+    result += spaces + "]"
+
+    return result
+  }
+}
+
+export class String extends Node, AltaString {
+  protected @override function equals(other: ref Node): bool {
+    if !(other instanceof String)
+      return false
+
+    let that = other as ref String
+
+    if (this as AltaString) != (that as AltaString)
+      return false
+
+    return true
+  }
+  public @override function toString(indent: Size): AltaString {
+    return "!!str \"" + escape(super<AltaString>) + '\"'
+  }
+}

@@ -1,0 +1,56 @@
+import String, CodePoint from "string"
+
+export function escape(string: String): String {
+  let result: String
+
+  for char: CodePoint in string.items {
+    if char == '\b' {
+      result += '\\'
+      result += 'b'
+    } else if char == '\f' {
+      result += '\\'
+      result += 'f'
+    } else if char == '\n' {
+      result += '\\'
+      result += 'n'
+    } else if char == '\r' {
+      result += '\\'
+      result += 'r'
+    } else {
+      if char == '"' || char == '\\'
+        result += '\\'
+      result += char
+    }
+  }
+
+  return result
+}
+
+export function unescape(string: String): String {
+  let result: String
+
+  let escapeNext = false
+
+  for char: CodePoint in string.items {
+    if escapeNext {
+      escapeNext = false
+      if char == 'b'
+        result += '\b'
+      else if char == 'f'
+        result += '\f'
+      else if char == 'n'
+        result += '\n'
+      else if char == 'r'
+        result += '\r'
+      else
+        result += char
+    } else {
+      if char == '\\'
+        escapeNext = true
+      else if char != '"'
+        result += char
+    }
+  }
+
+  return result
+}

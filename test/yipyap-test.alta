@@ -1,0 +1,29 @@
+import "../" as yipyap
+import File, printLine from "io"
+import String from "string"
+
+literal function main(argc: int, argv: ptr ptr byte): int {
+  let input: String = "foo: bar"
+
+  if argc > 1 {
+    input = ""
+    let file = new File(argv[1])
+    while let char = file.read?() {
+      input += *char
+    }
+  }
+
+  let parser = new yipyap.Parser()
+
+  parser.feed(input)
+  parser.finish()
+
+  printLine("---")
+
+  if parser.root
+    printLine((parser.root as ref yipyap.Node).toString())
+  else
+    printLine("No root node generated")
+
+  return 0
+}

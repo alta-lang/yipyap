@@ -1,2 +1,5 @@
 /alta-packages
-/*build*
+/alta-build
+**/.DS_Store
+**/._*
+.vscode

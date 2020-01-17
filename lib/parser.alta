@@ -1,5 +1,437 @@
-import "./objects.alta" as YAML
+import String, CodePoint from "string"
+import Size, SizeMaximum from "types"
+import printLine from "io"
+import Stack from "stack"
+import List from "list"
+import Exception from "exceptions"
+import escape, unescape from "util.alta"
+import "objects.alta" as YAML
+import Vector from "vector"
 
-export function parse(): YAML.Node {
+export class MisalignedIndentation extends Exception {}
+export class InvalidCharacter extends Exception {}
+export class ExpectedIndent extends Exception {}
+export class UnexpectedExit extends Exception {}
 
+enum TokenType: Size {
+  Any,
+  Indent,
+  Outdent,
+  Scalar,
+  KeyValueSeparator,
+  SequenceIndicator,
+  EOF,
+}
+
+class Token {
+  public var type = TokenType.Any
+  public var value: String
+  public var line: Size = 0
+  public var column: Size = 0
+
+  public constructor(type: TokenType, line: Size, column: Size) {
+    this.type = type
+    this.line = line
+    this.column = column
+  }
+  public constructor(value: String, line: Size, column: Size) {
+    this.value = value
+    this.line = line
+    this.column = column
+  }
+  public constructor(type: TokenType, line: Size, column: Size, value: String) {
+    this.type = type
+    this.line = line
+    this.column = column
+    this.value = value
+  }
+
+  public to String {
+    return this.value
+  }
+
+  public this += String: ref Token {
+    this.value += $
+    return this
+  }
+}
+
+enum Rule: Size {
+  Expression,
+  Mapping,
+  Sequence,
+  Scalar,
+}
+
+class Level {
+  public var rule: Rule = Rule.Expression
+  public var node: YAML.NodeBox = nullptr
+  public var cache: Vector<Token>
+  public var iteration: Size = SizeMaximum
+  public var state: Size = 0
+  public var isRoot = false
+  public var rootIndent: Size = 0
+  public var currentAddedSpaces: Size = 0
+  public var handedOff = false
+
+  public constructor() {}
+  public constructor(rule: Rule) {
+    this.rule = rule
+  }
+}
+
+export class Parser {
+  private var input: String
+  private var tokens: List<Token>
+
+  public var root: YAML.NodeBox = nullptr
+
+  public var currentLine: Size = 0
+  public var currentColumn: Size = 0
+
+  public function feed(input: String): void {
+    this.input += input
+  }
+
+  public function finish(): void {
+    this.scan()
+    this.tokens.pushBack(new Token(TokenType.EOF, this.currentLine, this.currentColumn))
+    this.parse()
+  }
+
+  public function scan(): void {
+    let handlingIndent = false
+    let indents: Stack<Size>
+    let currentLine: Size = 0
+    let currentColumn: Size = 0
+    let spacesFound: Size = 0
+    let unprocessed = new Token("", 0, 0)
+    let lastTok: Token? = null
+
+    let checkingForArray = false
+    let checkingForSeparator = false
+    let ignoringWhitespace = false
+    let inDoubleQuotedString = false
+    let inSingleQuotedString = false
+    let acceptNext = false
+    let mightExitSingleQuotedString = false
+    let checkIndents = true
+
+    let pushToken = (token: Token) => void {
+      this.tokens.pushBack(token)
+      lastTok = token
+    }
+
+    let pushUnprocessed = () => void {
+      if unprocessed.value.length != 0
+        pushToken(unprocessed)
+      unprocessed = new Token("", currentLine, currentColumn)
+    }
+
+    for char: CodePoint in this.input.items {
+      let processIndent = false
+
+      if currentColumn == 0 && checkIndents {
+        handlingIndent = true
+        if char == ' '
+          spacesFound = 1
+        else if char == '\n'
+          spacesFound = 0
+        else
+          processIndent = true
+      } else if handlingIndent {
+        if char == ' '
+          spacesFound += 1
+        else if char == '\n'
+          spacesFound = 0
+        else
+          processIndent = true
+      }
+
+      if processIndent {
+        handlingIndent = false
+        unprocessed.column += spacesFound
+        if indents.length == 0 || spacesFound > indents.top {
+          indents.push(spacesFound)
+          let str: String
+          for i: Size in 0..indents.top {
+            str += ' '
+          }
+          pushToken(new Token(TokenType.Indent, currentLine, currentColumn - spacesFound, str))
+        } else {
+          while indents.length > 1 && spacesFound < indents.top {
+            indents.pop()
+            let str: String
+            for i: Size in 0..indents.top {
+              str += ' '
+            }
+            pushToken(new Token(TokenType.Outdent, currentLine, currentColumn, str))
+          }
+          if spacesFound > indents.top
+            throw new MisalignedIndentation
+        }
+        spacesFound = 0
+      }
+
+      if handlingIndent && !processIndent {
+        # do nothing
+      } else if ignoringWhitespace && char == ' ' {
+        unprocessed.column = currentColumn + 1
+      } else {
+        ignoringWhitespace = false
+        if mightExitSingleQuotedString {
+          if char != '\'' {
+            checkIndents = true
+            inSingleQuotedString = false
+            pushUnprocessed()
+          }
+        }
+        if inDoubleQuotedString {
+          unprocessed += char
+          if acceptNext {
+            acceptNext = false
+          } else if char == '"' {
+            inDoubleQuotedString = false
+            checkIndents = true
+            pushUnprocessed()
+          } else if char == '\\' {
+            acceptNext = true
+          }
+        } else if inSingleQuotedString {
+          unprocessed += char
+          if mightExitSingleQuotedString
+            mightExitSingleQuotedString = false
+          else if char == '\''
+            mightExitSingleQuotedString = true
+        } else if checkingForArray {
+          checkingForArray = false
+          if char == ' ' {
+            unprocessed.value = unprocessed.value.substring(length: unprocessed.value.length - 1)
+            pushUnprocessed()
+            unprocessed.column = currentColumn + 1
+            if !lastTok || (*lastTok).type == TokenType.SequenceIndicator {
+              indents.push(currentColumn - 1)
+              let str: String
+              for i: Size in 0..indents.top {
+                str += ' '
+              }
+              pushToken(new Token(TokenType.Indent, currentLine, currentColumn - 1, str))
+            }
+            pushToken(new Token(TokenType.SequenceIndicator, currentLine, currentColumn - 1))
+            ignoringWhitespace = true
+          } else {
+            unprocessed += char
+          }
+        } else if checkingForSeparator {
+          checkingForSeparator = false
+          if char == ' ' || char == '\n' {
+            unprocessed.value = unprocessed.value.substring(length: unprocessed.value.length - 1)
+            printLine("unprocessed = ", unprocessed.value, "unprocessed.column = ", unprocessed.column, "; indents.top = ", indents.top)
+            if indents.length == 0 || unprocessed.column > indents.top {
+              indents.push(unprocessed.column)
+              let str: String
+              for i: Size in 0..indents.top {
+                str += ' '
+              }
+              pushToken(new Token(TokenType.Indent, currentLine, unprocessed.column, str))
+            }
+            pushUnprocessed()
+            if char == '\n'
+              unprocessed = new Token("", currentLine + 1, 0)
+            else
+              unprocessed.column = currentColumn + 1
+            pushToken(new Token(TokenType.KeyValueSeparator, currentLine, currentColumn - 1))
+            ignoringWhitespace = true
+          } else {
+            unprocessed += char
+          }
+        } else if char == '-' {
+          checkingForArray = true
+          unprocessed += char
+        } else if char == ':' {
+          checkingForSeparator = true
+          unprocessed += char
+        } else if char == '"' {
+          inDoubleQuotedString = true
+          checkIndents = false
+          pushUnprocessed()
+          unprocessed += char
+        } else if char == '\'' {
+          inSingleQuotedString = true
+          checkIndents = false
+          pushUnprocessed()
+          unprocessed += char
+        } else if char == '\n' {
+          pushUnprocessed()
+          unprocessed.line = currentLine + 1
+          unprocessed.column = 0
+        } else {
+          unprocessed += char
+        }
+      }
+
+      if char == '\n' {
+        currentLine += 1
+        currentColumn = 0
+      } else {
+        currentColumn += 1
+      }
+    }
+  }
+
+  public function parse(): void {
+    let levels: Stack<Level>
+
+    levels.push(new Level(Rule.Expression))
+
+    levels.top.isRoot = true
+    levels.top.state = 2
+
+    let it = this.tokens.items
+    let lastNode: YAML.NodeBox = nullptr
+    let tok: (ref Token)? = it.next()
+
+    while tok {
+      let token = *tok
+
+      if token.type == TokenType.Indent
+        printLine("indent token of ", token.value.length, " spaces found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.Outdent
+        printLine("outdent token of ", token.value.length, " spaces found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.SequenceIndicator
+        printLine("sequence indicator found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.KeyValueSeparator
+        printLine("key value separator found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.Scalar
+        printLine("scalar token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
+      else
+        printLine("token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
+
+      if levels.length == 0
+        throw new UnexpectedExit
+
+      let level: ref Level = levels.top
+      level.iteration += 1
+
+      let levelCount = levels.length
+
+      let goToNextToken = true
+
+      if level.state == 0 {
+        if token.type == TokenType.Indent {
+          level.rootIndent = token.value.length
+          level.state = 2
+        } else {
+          level.rootIndent = 0
+          level.state = 1
+          goToNextToken = false
+        }
+      } else {
+        if level.handedOff {
+          level.handedOff = false
+          let tmp: String
+          if lastNode
+            tmp = (lastNode as ref YAML.Node).toString()
+          else
+            tmp = new String("<unknown>")
+          printLine("coming back from handed off rule; result is ", tmp)
+          if level.rule == Rule.Mapping {
+            let key = new* YAML.String()
+            ;(key as ref YAML.String) += level.cache.pop()
+            ;(level.node as ref YAML.Mapping)[key as YAML.NodeBox] = lastNode
+          } else if level.rule == Rule.Sequence {
+            (level.node as ref YAML.Sequence).push(lastNode)
+          }
+          lastNode = nullptr
+        }
+        if token.type == TokenType.Outdent {
+          if level.state == 1 || token.value.length < level.rootIndent {
+            lastNode = level.node
+            levels.pop()
+            goToNextToken = false
+          } else {
+            level.currentAddedSpaces = token.value.length
+          }
+        } else if token.type == TokenType.Indent {
+          if level.state == 1 {
+            level.rootIndent = token.value.length
+            level.state = 2
+          }
+          level.currentAddedSpaces = token.value.length
+        } else if token.type == TokenType.Scalar || token.type == TokenType.Any {
+          if level.rule == Rule.Mapping {
+            printLine("caching a token: ", token.value)
+            level.cache.push(token)
+          } else {
+            let first = false
+            if level.node {
+              printLine("found scalar and node; current added spaces = ", level.currentAddedSpaces)
+              if level.currentAddedSpaces == 0 {
+                lastNode = level.node
+                levels.pop()
+                goToNextToken = false
+              }
+            } else {
+              first = true
+              level.rule = Rule.Scalar
+              level.node = new* YAML.String()
+            }
+            if goToNextToken {
+              let str = level.node as ref YAML.String
+              if !first
+                str += '\n'
+              if level.currentAddedSpaces > level.rootIndent {
+                for i: Size in 0..(level.currentAddedSpaces - level.rootIndent) {
+                  str += ' '
+                }
+              }
+              str += token.value
+            }
+          }
+        } else if token.type == TokenType.KeyValueSeparator {
+          if level.rule != Rule.Mapping {
+            printLine("creating a brand new mapping from ", (level.node as ref YAML.Node).toString())
+            let reassignRoot = this.root == level.node
+            level.cache.push(new Token(TokenType.Scalar, 0, 0, level.node as ref YAML.String))
+            level.node = new* YAML.Mapping()
+            if reassignRoot
+              this.root = level.node
+            printLine("level.rule was ", level.rule)
+            level.rule = Rule.Mapping
+            printLine("level.rule is now ", level.rule)
+          }
+          printLine("handing off...")
+          level.handedOff = true
+          levels.push(new Level(Rule.Expression))
+        } else if token.type == TokenType.SequenceIndicator {
+          if level.rule == Rule.Expression {
+            let reassignRoot = this.root == level.node
+            level.node = new* YAML.Sequence()
+            if reassignRoot
+              this.root = level.node
+            level.rule = Rule.Sequence
+          } else if level.rule != Rule.Sequence {
+            goToNextToken = false
+            lastNode = level.node
+            levels.pop()
+          }
+          if goToNextToken {
+            level.handedOff = true
+            levels.push(new Level(Rule.Expression))
+          }
+        } else if token.type == TokenType.EOF {
+          if levels.length != 1
+            goToNextToken = false
+          lastNode = level.node
+          levels.pop()
+        }
+      }
+
+      if goToNextToken
+        tok = it.next()
+
+      if levelCount == levels.length && !this.root && level.node
+        this.root = level.node
+    }
+  }
 }

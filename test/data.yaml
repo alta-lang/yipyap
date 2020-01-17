@@ -1,0 +1,25 @@
+foo: bar
+bar: foo
+longer key name: "foobar\"foo"
+bob:
+  - awesome
+    barry
+  - cool
+  - "foo
+    bar"
+  - - bob: true
+      barry: true
+    - dave: true
+john: doe
+johny:
+  will: 3
+  bob: "foo"
+  dave: |
+    hi there
+    wassup
+     one space
+      two space
+       three space
+        four
+       three again
+    none!
