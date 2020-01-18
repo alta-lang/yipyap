@@ -12,6 +12,8 @@ export class MisalignedIndentation extends Exception {}
 export class InvalidCharacter extends Exception {}
 export class ExpectedIndent extends Exception {}
 export class UnexpectedExit extends Exception {}
+export class InvalidBlockSequenceLocation extends Exception {}
+export class UnexpectedToken extends Exception {}
 
 enum TokenType: Size {
   Any,
@@ -20,6 +22,11 @@ enum TokenType: Size {
   Scalar,
   KeyValueSeparator,
   SequenceIndicator,
+  MappingStartIndicator,
+  MappingEndIndicator,
+  SequenceStartIndicator,
+  SequenceEndIndicator,
+  ItemSeparator,
   EOF,
 }
 
@@ -61,18 +68,23 @@ enum Rule: Size {
   Mapping,
   Sequence,
   Scalar,
+  FlowMapping,
+  FlowSequence,
 }
 
 class Level {
   public var rule: Rule = Rule.Expression
   public var node: YAML.NodeBox = nullptr
-  public var cache: Vector<Token>
+  public var cache: Vector<YAML.NodeBox>
   public var iteration: Size = SizeMaximum
   public var state: Size = 0
   public var isRoot = false
   public var rootIndent: Size = 0
   public var currentAddedSpaces: Size = 0
   public var handedOff = false
+  public var noBlock = false
+  public var needsSeparator = false
+  public var checkForEnd = false
 
   public constructor() {}
   public constructor(rule: Rule) {
@@ -91,6 +103,8 @@ export class Parser {
 
   public function feed(input: String): void {
     this.input += input
+    if input[input.length - 1] != '\n'
+      this.input += '\n'
   }
 
   public function finish(): void {
@@ -122,10 +136,12 @@ export class Parser {
       lastTok = token
     }
 
-    let pushUnprocessed = () => void {
-      if unprocessed.value.length != 0
+    let pushUnprocessed = () => bool {
+      let pushIt = unprocessed.value.length != 0
+      if pushIt
         pushToken(unprocessed)
       unprocessed = new Token("", currentLine, currentColumn)
+      return pushIt
     }
 
     for char: CodePoint in this.input.items {
@@ -227,7 +243,7 @@ export class Parser {
           if char == ' ' || char == '\n' {
             unprocessed.value = unprocessed.value.substring(length: unprocessed.value.length - 1)
             printLine("unprocessed = ", unprocessed.value, "unprocessed.column = ", unprocessed.column, "; indents.top = ", indents.top)
-            if indents.length == 0 || unprocessed.column > indents.top {
+            if indents.length == 0 || (unprocessed.column > indents.top && unprocessed.value.length > 0) {
               indents.push(unprocessed.column)
               let str: String
               for i: Size in 0..indents.top {
@@ -265,6 +281,21 @@ export class Parser {
           pushUnprocessed()
           unprocessed.line = currentLine + 1
           unprocessed.column = 0
+        } else if char == '{' {
+          pushUnprocessed()
+          pushToken(new Token(TokenType.MappingStartIndicator, currentLine, currentColumn))
+        } else if char == '}' {
+          pushUnprocessed()
+          pushToken(new Token(TokenType.MappingEndIndicator, currentLine, currentColumn))
+        } else if char == '[' {
+          pushUnprocessed()
+          pushToken(new Token(TokenType.SequenceStartIndicator, currentLine, currentColumn))
+        } else if char == ']' {
+          pushUnprocessed()
+          pushToken(new Token(TokenType.SequenceEndIndicator, currentLine, currentColumn))
+        } else if char == ',' {
+          pushUnprocessed()
+          pushToken(new Token(TokenType.ItemSeparator, currentLine, currentColumn))
         } else {
           unprocessed += char
         }
@@ -304,11 +335,27 @@ export class Parser {
         printLine("key value separator found at ", token.line + 1, ':', token.column + 1)
       else if token.type == TokenType.Scalar
         printLine("scalar token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
+      else if token.type == TokenType.MappingStartIndicator
+        printLine("mapping start indicator found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.MappingEndIndicator
+        printLine("mapping end indicator found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.SequenceStartIndicator
+        printLine("sequence start indicator found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.SequenceEndIndicator
+        printLine("sequence end indicator found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.ItemSeparator
+        printLine("item separator found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.EOF
+        printLine("EOF found")
       else
         printLine("token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
 
-      if levels.length == 0
-        throw new UnexpectedExit
+      if levels.length == 0 {
+        if token.type != TokenType.EOF
+          throw new UnexpectedExit
+        else
+          break
+      }
 
       let level: ref Level = levels.top
       level.iteration += 1
@@ -335,33 +382,66 @@ export class Parser {
           else
             tmp = new String("<unknown>")
           printLine("coming back from handed off rule; result is ", tmp)
-          if level.rule == Rule.Mapping {
-            let key = new* YAML.String()
-            ;(key as ref YAML.String) += level.cache.pop()
-            ;(level.node as ref YAML.Mapping)[key as YAML.NodeBox] = lastNode
-          } else if level.rule == Rule.Sequence {
+          if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
+            (level.node as ref YAML.Mapping)[level.cache.pop()] = lastNode
+          } else if level.rule == Rule.Sequence || level.rule == Rule.FlowSequence {
             (level.node as ref YAML.Sequence).push(lastNode)
           }
           lastNode = nullptr
+          if level.rule == Rule.FlowMapping || level.rule == Rule.FlowSequence
+            level.needsSeparator = true
         }
-        if token.type == TokenType.Outdent {
-          if level.state == 1 || token.value.length < level.rootIndent {
-            lastNode = level.node
-            levels.pop()
-            goToNextToken = false
-          } else {
-            level.currentAddedSpaces = token.value.length
+        if token.type == TokenType.ItemSeparator && level.rule != Rule.FlowMapping && level.rule != Rule.FlowSequence {
+          lastNode = level.node
+          levels.pop()
+          goToNextToken = false
+        } else if token.type == TokenType.Outdent {
+          if level.rule != Rule.FlowMapping && level.rule != Rule.FlowSequence {
+            if level.state == 1 || token.value.length < level.rootIndent {
+              lastNode = level.node
+              levels.pop()
+              goToNextToken = false
+            } else {
+              level.currentAddedSpaces = token.value.length
+            }
           }
         } else if token.type == TokenType.Indent {
           if level.state == 1 {
             level.rootIndent = token.value.length
             level.state = 2
           }
-          level.currentAddedSpaces = token.value.length
+          if level.rule != Rule.FlowMapping && level.rule != Rule.FlowSequence
+            level.currentAddedSpaces = token.value.length
+        } else if level.needsSeparator {
+          printLine("needing separator... found ", token.type)
+          if token.type == TokenType.ItemSeparator {
+            level.needsSeparator = false
+            if level.rule == Rule.FlowSequence
+              level.checkForEnd = true
+          } else if (
+            (token.type == TokenType.MappingEndIndicator && level.rule == Rule.FlowMapping) ||
+            (token.type == TokenType.SequenceEndIndicator && level.rule == Rule.FlowSequence)
+          ) {
+            lastNode = level.node
+            levels.pop()
+          } else {
+            throw new UnexpectedToken
+          }
+        } else if (
+          (token.type == TokenType.MappingEndIndicator && level.rule == Rule.FlowMapping) ||
+          (token.type == TokenType.SequenceEndIndicator && level.rule == Rule.FlowSequence)
+        ) {
+          lastNode = level.node
+          levels.pop()
+        } else if level.checkForEnd {
+          level.checkForEnd = false
+          level.handedOff = true
+          levels.push(new Level(Rule.Expression))
+          goToNextToken = false
         } else if token.type == TokenType.Scalar || token.type == TokenType.Any {
-          if level.rule == Rule.Mapping {
+          if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
             printLine("caching a token: ", token.value)
-            level.cache.push(token)
+            level.cache.push(new* YAML.String(token))
           } else {
             let first = false
             if level.node {
@@ -374,7 +454,7 @@ export class Parser {
             } else {
               first = true
               level.rule = Rule.Scalar
-              level.node = new* YAML.String()
+              level.node = new* YAML.String
             }
             if goToNextToken {
               let str = level.node as ref YAML.String
@@ -389,11 +469,11 @@ export class Parser {
             }
           }
         } else if token.type == TokenType.KeyValueSeparator {
-          if level.rule != Rule.Mapping {
+          if level.rule != Rule.Mapping && level.rule != Rule.FlowMapping {
             printLine("creating a brand new mapping from ", (level.node as ref YAML.Node).toString())
             let reassignRoot = this.root == level.node
-            level.cache.push(new Token(TokenType.Scalar, 0, 0, level.node as ref YAML.String))
-            level.node = new* YAML.Mapping()
+            level.cache.push(level.node as ref YAML.String)
+            level.node = new* YAML.Mapping
             if reassignRoot
               this.root = level.node
             printLine("level.rule was ", level.rule)
@@ -403,10 +483,14 @@ export class Parser {
           printLine("handing off...")
           level.handedOff = true
           levels.push(new Level(Rule.Expression))
+          if level.rule == Rule.FlowMapping
+            levels.top.noBlock = true
         } else if token.type == TokenType.SequenceIndicator {
-          if level.rule == Rule.Expression {
+          if level.noBlock {
+            throw new InvalidBlockSequenceLocation
+          } if level.rule == Rule.Expression {
             let reassignRoot = this.root == level.node
-            level.node = new* YAML.Sequence()
+            level.node = new* YAML.Sequence
             if reassignRoot
               this.root = level.node
             level.rule = Rule.Sequence
@@ -424,6 +508,13 @@ export class Parser {
             goToNextToken = false
           lastNode = level.node
           levels.pop()
+        } else if token.type == TokenType.MappingStartIndicator {
+          level.rule = Rule.FlowMapping
+          level.node = new* YAML.Mapping
+        } else if token.type == TokenType.SequenceStartIndicator {
+          level.rule = Rule.FlowSequence
+          level.node = new* YAML.Sequence
+          level.checkForEnd = true
         }
       }
 

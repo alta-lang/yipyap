@@ -23,3 +23,23 @@ johny:
         four
        three again
     none!
+flow-time: {
+  look: im flowing!,
+  sweet: noice,
+  plus: [
+    i can do,
+    this!,
+  ],
+}
+does this: "work?"
+how:
+  about:
+    this: 4
+ok:
+  how about: {
+  this: "huh?",
+  because: "it's misaligned"
+}
+  and then: does this work
+  but...: will it
+pop out: "?"

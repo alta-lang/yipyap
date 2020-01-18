@@ -44,9 +44,6 @@ export class NodeBox extends Box<Node> {
   public @from constructor(pointer: ref Node) {
     super(pointer)
   }
-  public @copy constructor(other: ref NodeBox) {
-    super(other)
-  }
 
   public this == NodeBox: bool {
     # check to see if the Boxes are valid before using them
@@ -142,6 +139,15 @@ export class Sequence extends Node, Vector<NodeBox> {
 }
 
 export class String extends Node, AltaString {
+  public constructor() {
+    super<Node>()
+    super<AltaString>()
+  }
+  public @from constructor(string: AltaString) {
+    super<Node>()
+    super<AltaString>(string)
+  }
+
   protected @override function equals(other: ref Node): bool {
     if !(other instanceof String)
       return false
