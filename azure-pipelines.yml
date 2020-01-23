@@ -1,0 +1,27 @@
+variables:
+  Alta.Version: 05119f3
+
+strategy:
+  matrix:
+    linux:
+      CI.ImageName: ubuntu-latest
+    macos:
+      CI.ImageName: macOS-latest
+    windows:
+      CI.ImageName: windows-latest
+
+pool:
+  vmImage: $(CI.ImageName)
+
+steps:
+- pwsh: |
+    . ./deps/helpers/Get-AltaCompiler.ps1
+    $AltaReleaseBin = Get-AltaCompiler -Version $(Alta.Version) -DestinationDirectory "tmp/altac/$(Alta.Version)"
+    echo "##vso[task.setvariable variable=Alta.Compiler.Path]$AltaReleaseBin"
+  displayName: "Get the Alta compiler (version $(Alta.Version))"
+- pwsh: |
+    & "$(Alta.Compiler.Path)" -c
+  displayName: "Compile the library"
+- pwsh: |
+    & "$(Alta.Compiler.Path)" -c -ot exe "test/yipyap-test.alta"
+  displayName: "Compile the simple test executable"
