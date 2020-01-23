@@ -3,11 +3,11 @@ variables:
 
 strategy:
   matrix:
-    linux:
+    Linux:
       CI.ImageName: ubuntu-latest
-    macos:
+    macOS:
       CI.ImageName: macOS-latest
-    windows:
+    Windows:
       CI.ImageName: windows-latest
 
 pool:
@@ -22,6 +22,7 @@ steps:
     echo "##vso[task.setvariable variable=Alta.Compiler.Path]$AltaReleaseBin"
   displayName: "Get the Alta compiler (version $(Alta.Version))"
 - pwsh: |
+    ls -l "$(Alta.Compiler.Path)"
     & "$(Alta.Compiler.Path)" -c
   displayName: "Compile the library"
 - pwsh: |
