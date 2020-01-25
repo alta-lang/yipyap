@@ -27,6 +27,7 @@ enum TokenType: Size {
   SequenceStartIndicator,
   SequenceEndIndicator,
   ItemSeparator,
+  ComplexKeyIndicator,
   EOF,
 }
 
@@ -85,6 +86,8 @@ class Level {
   public var noBlock = false
   public var needsSeparator = false
   public var checkForEnd = false
+  public var gettingKey = false
+  public var isComplexKey = false
 
   public constructor() {}
   public constructor(rule: Rule) {
@@ -175,7 +178,9 @@ export class Parser {
           }
           pushToken(new Token(TokenType.Indent, currentLine, currentColumn - spacesFound, str))
         } else {
+          printLine("starting outdent loop; indents.top = ", indents.top, "; spacesFound = ", spacesFound, "; location = ", currentLine + 1, ':', currentColumn + 1)
           while indents.length > 1 && spacesFound < indents.top {
+            printLine("popping indent with ", indents.top, " spaces")
             indents.pop()
             let str: String
             for i: Size in 0..indents.top {
@@ -183,6 +188,7 @@ export class Parser {
             }
             pushToken(new Token(TokenType.Outdent, currentLine, currentColumn, str))
           }
+          printLine("finished outdent loop with indents.top = ", indents.top, " and spacesFound = ", spacesFound)
           if spacesFound > indents.top
             throw new MisalignedIndentation
         }
@@ -196,9 +202,12 @@ export class Parser {
       } else {
         ignoringWhitespace = false
         if mightExitSingleQuotedString {
+          printLine("might exit single quoted string...")
           if char != '\'' {
+            printLine("exiting single quoted string.")
             checkIndents = true
             inSingleQuotedString = false
+            mightExitSingleQuotedString = false
             pushUnprocessed()
           }
         }
@@ -225,7 +234,7 @@ export class Parser {
             unprocessed.value = unprocessed.value.substring(length: unprocessed.value.length - 1)
             pushUnprocessed()
             unprocessed.column = currentColumn + 1
-            if !lastTok || (*lastTok).type == TokenType.SequenceIndicator {
+            if (!lastTok || (*lastTok).type != TokenType.Indent) && (indents.top != currentColumn - 1) {
               indents.push(currentColumn - 1)
               let str: String
               for i: Size in 0..indents.top {
@@ -242,7 +251,7 @@ export class Parser {
           checkingForSeparator = false
           if char == ' ' || char == '\n' {
             unprocessed.value = unprocessed.value.substring(length: unprocessed.value.length - 1)
-            printLine("unprocessed = ", unprocessed.value, "unprocessed.column = ", unprocessed.column, "; indents.top = ", indents.top)
+            printLine("unprocessed = ", unprocessed.value, "; unprocessed.column = ", unprocessed.column, "; indents.top = ", indents.top)
             if indents.length == 0 || (unprocessed.column > indents.top && unprocessed.value.length > 0) {
               indents.push(unprocessed.column)
               let str: String
@@ -296,6 +305,10 @@ export class Parser {
         } else if char == ',' {
           pushUnprocessed()
           pushToken(new Token(TokenType.ItemSeparator, currentLine, currentColumn))
+        } else if char == '?' {
+          pushUnprocessed()
+          pushToken(new Token(TokenType.ComplexKeyIndicator, currentLine, currentColumn))
+          ignoringWhitespace = true
         } else {
           unprocessed += char
         }
@@ -347,6 +360,8 @@ export class Parser {
         printLine("item separator found at ", token.line + 1, ':', token.column + 1)
       else if token.type == TokenType.EOF
         printLine("EOF found")
+      else if token.type == TokenType.ComplexKeyIndicator
+        printLine("complex key indicator found at ", token.line + 1, ':', token.column + 1)
       else
         printLine("token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
 
@@ -383,7 +398,12 @@ export class Parser {
             tmp = new String("<unknown>")
           printLine("coming back from handed off rule; result is ", tmp)
           if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
-            (level.node as ref YAML.Mapping)[level.cache.pop()] = lastNode
+            if level.gettingKey {
+              level.gettingKey = false
+              level.cache.push(lastNode)
+            } else {
+              (level.node as ref YAML.Mapping)[level.cache.pop()] = lastNode
+            }
           } else if level.rule == Rule.Sequence || level.rule == Rule.FlowSequence {
             (level.node as ref YAML.Sequence).push(lastNode)
           }
@@ -470,25 +490,34 @@ export class Parser {
           }
         } else if token.type == TokenType.KeyValueSeparator {
           if level.rule != Rule.Mapping && level.rule != Rule.FlowMapping {
-            printLine("creating a brand new mapping from ", (level.node as ref YAML.Node).toString())
-            let reassignRoot = this.root == level.node
-            level.cache.push(level.node as ref YAML.String)
-            level.node = new* YAML.Mapping
-            if reassignRoot
-              this.root = level.node
-            printLine("level.rule was ", level.rule)
-            level.rule = Rule.Mapping
-            printLine("level.rule is now ", level.rule)
+            if level.isComplexKey {
+              lastNode = level.node
+              levels.pop()
+              goToNextToken = false
+            } else {
+              printLine("creating a brand new mapping from ", (level.node as ref YAML.Node).toString())
+              let reassignRoot = this.root == level.node
+              level.cache.push(level.node as ref YAML.String)
+              level.node = new* YAML.Mapping
+              if reassignRoot
+                this.root = level.node
+              printLine("level.rule was ", level.rule)
+              level.rule = Rule.Mapping
+              printLine("level.rule is now ", level.rule)
+            }
           }
-          printLine("handing off...")
-          level.handedOff = true
-          levels.push(new Level(Rule.Expression))
-          if level.rule == Rule.FlowMapping
-            levels.top.noBlock = true
+          if goToNextToken {
+            printLine("handing off...")
+            level.handedOff = true
+            levels.push(new Level(Rule.Expression))
+            if level.rule == Rule.FlowMapping
+              levels.top.noBlock = true
+          }
         } else if token.type == TokenType.SequenceIndicator {
           if level.noBlock {
             throw new InvalidBlockSequenceLocation
-          } if level.rule == Rule.Expression {
+          }
+          if level.rule == Rule.Expression {
             let reassignRoot = this.root == level.node
             level.node = new* YAML.Sequence
             if reassignRoot
@@ -515,6 +544,25 @@ export class Parser {
           level.rule = Rule.FlowSequence
           level.node = new* YAML.Sequence
           level.checkForEnd = true
+        } else if token.type == TokenType.ComplexKeyIndicator {
+          if level.rule == Rule.Expression {
+            let reassignRoot = this.root == level.node
+            level.node = new* YAML.Mapping
+            if reassignRoot
+              this.root = level.node
+            level.rule = Rule.Mapping
+          } else if level.rule != Rule.Mapping && level.rule != Rule.FlowMapping {
+            lastNode = level.node
+            levels.pop()
+            goToNextToken = false
+          }
+          if goToNextToken {
+            printLine("handing off to a complex key...")
+            level.handedOff = true
+            level.gettingKey = true
+            levels.push(new Level(Rule.Expression))
+            levels.top.isComplexKey = true
+          }
         }
       }
 

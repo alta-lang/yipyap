@@ -1,3 +1,7 @@
 name: yipyap
 version: 0.1.0
 type: lib
+targets:
+- name: yipyap-test
+  main: test/yipyap-test.alta
+  type: exe

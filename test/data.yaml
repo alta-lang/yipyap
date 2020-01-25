@@ -43,3 +43,14 @@ ok:
   and then: does this work
   but...: will it
 pop out: "?"
+try the complex keys:
+  ? - hi: how
+    - are: 'you?'
+  : 'good and you?'
+  ? ok lets try
+  : this
+  ? {
+    will: flow,
+    style nodes: 'work?',
+  }
+  : definitely maybe yes
