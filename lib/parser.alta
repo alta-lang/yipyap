@@ -133,6 +133,8 @@ export class Parser {
     let acceptNext = false
     let mightExitSingleQuotedString = false
     let checkIndents = true
+    let inComment = false
+    let lastCharacterWasSpace = false
 
     let pushToken = (token: Token) => void {
       this.tokens.pushBack(token)
@@ -211,6 +213,10 @@ export class Parser {
             pushUnprocessed()
           }
         }
+        if inComment {
+          if char == '\n'
+            inComment = false
+        }
         if inDoubleQuotedString {
           unprocessed += char
           if acceptNext {
@@ -270,6 +276,9 @@ export class Parser {
           } else {
             unprocessed += char
           }
+        } else if char == '#' && (currentColumn == 0 || lastCharacterWasSpace) {
+          inComment = true
+          pushUnprocessed()
         } else if char == '-' {
           checkingForArray = true
           unprocessed += char
@@ -313,6 +322,8 @@ export class Parser {
           unprocessed += char
         }
       }
+
+      lastCharacterWasSpace = char == ' ' 
 
       if char == '\n' {
         currentLine += 1

@@ -54,3 +54,6 @@ try the complex keys:
     style nodes: 'work?',
   }
   : definitely maybe yes
+some: random # comment here!
+it just: needs a #space before it
+however: this#is not a comment
