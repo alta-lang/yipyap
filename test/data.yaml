@@ -87,3 +87,19 @@ folding test: >
     * beans
     * my dude
   this is on its own line
+
+
+keep extra spaces at the end: |+
+  foo
+  bar
+
+
+
+no final spaces: >-
+  does it
+  work like
+  this
+
+  maybe...
+
+cool: 5
