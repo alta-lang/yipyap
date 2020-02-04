@@ -11,7 +11,7 @@ bob:
       barry: true
     - dave: true
 john: doe
-johny:
+johnny:
   will: 3
   bob: "foo"
   dave: |
@@ -57,3 +57,33 @@ try the complex keys:
 some: random # comment here!
 it just: needs a #space before it
 however: this#is not a comment
+is this: -1 # interpreted correctly?
+here's a literal block: |
+  foo
+  bar
+    cars are cool
+  yeah they are
+explicit indent: |1
+  there's an extra space at the beginning
+  this is the simple test case
+deep:
+  explicit:
+    indent:
+      test: |1
+        how many spaces
+
+         are
+       on this one?
+       idk
+         maybe a hundred?
+folding test: >
+  these two lines
+  are folded together
+
+  this, however, is on a separate line
+
+  these indented lines are preserved:
+    * cool
+    * beans
+    * my dude
+  this is on its own line

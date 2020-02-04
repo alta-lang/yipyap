@@ -1,5 +1,5 @@
 variables:
-  Alta.Version: 5f8bac2
+  Alta.Version: 222dcfb
 
 strategy:
   matrix:

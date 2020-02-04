@@ -7,6 +7,7 @@ import Exception from "exceptions"
 import escape, unescape from "util.alta"
 import "objects.alta" as YAML
 import Vector from "vector"
+import parseNumber from "util"
 
 export class MisalignedIndentation extends Exception {}
 export class InvalidCharacter extends Exception {}
@@ -88,11 +89,16 @@ class Level {
   public var checkForEnd = false
   public var gettingKey = false
   public var isComplexKey = false
+  public var lineOfLastToken: Size = 0
 
   public constructor() {}
   public constructor(rule: Rule) {
     this.rule = rule
   }
+}
+
+function isWhitespace(char: CodePoint): bool {
+  return char == ' ' || char == '\t' || char == '\n' || char == '\r'
 }
 
 export class Parser {
@@ -116,6 +122,88 @@ export class Parser {
     this.parse()
   }
 
+  public function process(string: ref YAML.String): void {
+    let trim = () => void {
+      printLine("trimming it...")
+      let newStr: String
+      let start: Size = 0
+      let end: Size = string.length
+      while start < string.length && isWhitespace(string[start])
+        start += 1
+      while end > 0 && isWhitespace(string[end - 1])
+        end -= 1
+      string = string.substring(from: start, to: end)
+    }
+
+    printLine("now processing: \"", escape(string), '"')
+
+    if string.length < 2
+      return trim()
+    if string[0] == '"' {
+      string = unescape(string.substring(from: 1, to: string.length - 1))
+    } else if string[0] == '\'' {
+      let newStr: String
+      for char: CodePoint in string.items {
+        if char != '\'' || newStr.length == 0 || newStr[newStr.length - 1] != '\'' {
+          newStr += char
+        }
+      }
+      string = newStr.substring(from: 1, to: newStr.length - 1)
+    } else if string[0] == '|' || string[0] == '>' {
+      let i: Size = 1
+      while string.length > i && string[i] >= '0' && string[i] <= '9'
+        i += 1
+      while string.length > i && string[i] == ' '
+        i += 1
+      if string.length <= i || string[i] != '\n'
+        return trim()
+      if string[0] == '|' {
+        string = string.substring(from: i + 1)
+      } else if string[0] == '>' {
+        string = string.substring(from: i + 1)
+        let newStr: String
+        let firstNewlineFound = false
+        let currentLineIndented = false
+        let lastLineIndented = false
+        let firstInLine = true
+        for char: CodePoint in string.items {
+          if !firstNewlineFound && char == '\n' {
+            if currentLineIndented
+              newStr += '\n'
+            else
+              firstNewlineFound = true
+            lastLineIndented = currentLineIndented
+            currentLineIndented = false
+            firstInLine = true
+          } else if firstNewlineFound && (char == ' ' || char == '\t') && firstInLine {
+            firstNewlineFound = false
+            currentLineIndented = true
+            newStr += '\n'
+            newStr += char
+            firstInLine = false
+          } else if firstNewlineFound && char != '\n' && !(newStr.length == 0 || newStr[newStr.length - 1] == '\n') {
+            newStr += ' '
+            newStr += char
+            firstNewlineFound = false
+            firstInLine = false
+          } else if firstNewlineFound && char == '\n' {
+            newStr += '\n'
+            lastLineIndented = currentLineIndented
+            currentLineIndented = false
+            firstInLine = true
+          } else {
+            firstNewlineFound = false
+            newStr += char
+            firstInLine = false
+          }
+        }
+        string = newStr
+      }
+    } else {
+      trim()
+    }
+  }
+
   public function scan(): void {
     let handlingIndent = false
     let indents: Stack<Size>
@@ -124,6 +212,7 @@ export class Parser {
     let spacesFound: Size = 0
     let unprocessed = new Token("", 0, 0)
     let lastTok: Token? = null
+    let lastChar: CodePoint = '\0'
 
     let checkingForArray = false
     let checkingForSeparator = false
@@ -135,6 +224,10 @@ export class Parser {
     let checkIndents = true
     let inComment = false
     let lastCharacterWasSpace = false
+    let inBlockScalar = false
+    let startingBlockScalar = false
+    let blockScalarInitialIndent: Size = 0
+    let flowCollectionCount: Size = 0
 
     let pushToken = (token: Token) => void {
       this.tokens.pushBack(token)
@@ -151,6 +244,13 @@ export class Parser {
 
     for char: CodePoint in this.input.items {
       let processIndent = false
+
+
+      if lastChar == '\n' && char == '\n' {
+        pushUnprocessed()
+        unprocessed.line = currentLine + 1
+        unprocessed.column = 0
+      }
 
       if currentColumn == 0 && checkIndents {
         handlingIndent = true
@@ -217,6 +317,27 @@ export class Parser {
           if char == '\n'
             inComment = false
         }
+        if inBlockScalar {
+          if startingBlockScalar {
+            printLine("handling block scalar header")
+            if !(char >= '0' && char <= '9') {
+              startingBlockScalar = false
+              let explicitStr = unprocessed.value.substring(from: 1)
+              if explicitStr {
+                let explicitIndent = parseNumber<Size>(explicitStr)
+                indents.push(indents.top + explicitIndent)
+                let str: String
+                for i: Size in 0..indents.top {
+                  str += ' '
+                }
+                pushToken(new Token(TokenType.Indent, currentLine + 1, 0, str))
+              }
+            }
+          } else if indents.top <= blockScalarInitialIndent {
+            inBlockScalar = false
+          }
+        }
+        let atBoundary = (!lastTok || ((*lastTok).type != TokenType.Any) || (*lastTok).line != currentLine) && unprocessed.value.length == 0
         if inDoubleQuotedString {
           unprocessed += char
           if acceptNext {
@@ -276,54 +397,66 @@ export class Parser {
           } else {
             unprocessed += char
           }
-        } else if char == '#' && (currentColumn == 0 || lastCharacterWasSpace) {
-          inComment = true
-          pushUnprocessed()
-        } else if char == '-' {
-          checkingForArray = true
-          unprocessed += char
-        } else if char == ':' {
-          checkingForSeparator = true
-          unprocessed += char
-        } else if char == '"' {
-          inDoubleQuotedString = true
-          checkIndents = false
-          pushUnprocessed()
-          unprocessed += char
-        } else if char == '\'' {
-          inSingleQuotedString = true
-          checkIndents = false
-          pushUnprocessed()
-          unprocessed += char
         } else if char == '\n' {
           pushUnprocessed()
           unprocessed.line = currentLine + 1
           unprocessed.column = 0
-        } else if char == '{' {
+        } else if char == '#' && (currentColumn == 0 || lastCharacterWasSpace) && !inBlockScalar {
+          inComment = true
+          pushUnprocessed()
+        } else if char == ':' && !inBlockScalar {
+          checkingForSeparator = true
+          unprocessed += char
+        } else if atBoundary && char == '-' {
+          printLine("checking for an array at ", currentLine + 1, ':', currentColumn + 1)
+          checkingForArray = true
+          unprocessed += char
+        } else if atBoundary && char == '"' && !inBlockScalar {
+          inDoubleQuotedString = true
+          checkIndents = false
+          pushUnprocessed()
+          unprocessed += char
+        } else if atBoundary && char == '\'' && !inBlockScalar {
+          inSingleQuotedString = true
+          checkIndents = false
+          pushUnprocessed()
+          unprocessed += char
+        } else if atBoundary && char == '{' && !inBlockScalar {
+          flowCollectionCount += 1
           pushUnprocessed()
           pushToken(new Token(TokenType.MappingStartIndicator, currentLine, currentColumn))
-        } else if char == '}' {
+        } else if atBoundary && char == '}' && !inBlockScalar {
+          flowCollectionCount -= 1
           pushUnprocessed()
           pushToken(new Token(TokenType.MappingEndIndicator, currentLine, currentColumn))
-        } else if char == '[' {
+        } else if atBoundary && char == '[' && !inBlockScalar {
+          flowCollectionCount += 1
           pushUnprocessed()
           pushToken(new Token(TokenType.SequenceStartIndicator, currentLine, currentColumn))
-        } else if char == ']' {
+        } else if atBoundary && char == ']' && !inBlockScalar {
+          flowCollectionCount -= 1
           pushUnprocessed()
           pushToken(new Token(TokenType.SequenceEndIndicator, currentLine, currentColumn))
-        } else if char == ',' {
+        } else if flowCollectionCount > 0 && char == ',' {
           pushUnprocessed()
           pushToken(new Token(TokenType.ItemSeparator, currentLine, currentColumn))
-        } else if char == '?' {
+        } else if atBoundary && char == '?' && !inBlockScalar {
           pushUnprocessed()
           pushToken(new Token(TokenType.ComplexKeyIndicator, currentLine, currentColumn))
           ignoringWhitespace = true
+        } else if atBoundary && (char == '>' || char == '|') {
+          printLine("handling block at ", currentLine + 1, ':', currentColumn + 1)
+          pushUnprocessed()
+          inBlockScalar = true
+          startingBlockScalar = true
+          blockScalarInitialIndent = indents.top
+          unprocessed += char
         } else {
           unprocessed += char
         }
       }
 
-      lastCharacterWasSpace = char == ' ' 
+      lastCharacterWasSpace = char == ' '
 
       if char == '\n' {
         currentLine += 1
@@ -331,6 +464,7 @@ export class Parser {
       } else {
         currentColumn += 1
       }
+      lastChar = char
     }
   }
 
@@ -408,6 +542,8 @@ export class Parser {
           else
             tmp = new String("<unknown>")
           printLine("coming back from handed off rule; result is ", tmp)
+          if (lastNode as ref YAML.Node) instanceof YAML.String
+            this.process(lastNode as ref YAML.String)
           if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
             if level.gettingKey {
               level.gettingKey = false
@@ -473,6 +609,7 @@ export class Parser {
           if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
             printLine("caching a token: ", token.value)
             level.cache.push(new* YAML.String(token))
+            this.process(level.cache.last as ref YAML.String)
           } else {
             let first = false
             if level.node {
@@ -489,14 +626,20 @@ export class Parser {
             }
             if goToNextToken {
               let str = level.node as ref YAML.String
-              if !first
-                str += '\n'
+              if !first {
+                printLine("last line = ", level.lineOfLastToken + 1)
+                printLine("current line = ", token.line + 1)
+                for i: Size in level.lineOfLastToken..token.line {
+                  str += '\n'
+                }
+              }
               if level.currentAddedSpaces > level.rootIndent {
                 for i: Size in 0..(level.currentAddedSpaces - level.rootIndent) {
                   str += ' '
                 }
               }
               str += token.value
+              level.lineOfLastToken = token.line
             }
           }
         } else if token.type == TokenType.KeyValueSeparator {
@@ -583,5 +726,8 @@ export class Parser {
       if levelCount == levels.length && !this.root && level.node
         this.root = level.node
     }
+
+    if this.root && (this.root as ref YAML.Node) instanceof YAML.String
+      this.process(this.root as ref YAML.String)
   }
 }
