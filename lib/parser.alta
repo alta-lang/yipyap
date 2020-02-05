@@ -449,8 +449,9 @@ export class Parser {
             unprocessed.value = unprocessed.value.substring(length: unprocessed.value.length - 1)
             pushUnprocessed()
             unprocessed.column = this.currentColumn + 1
-            if (!lastTok || (*lastTok).type != TokenType.Indent) && (indents.top != this.currentColumn - 1) {
-              indents.push(this.currentColumn - 1)
+            if (!lastTok || (*lastTok).type != TokenType.Indent) && (indents.top == 0 || indents.top != this.currentColumn - 1) {
+              if this.currentColumn != 0
+                indents.push(this.currentColumn - 1)
               let str: String
               for i: Size in 0..indents.top {
                 str += ' '
