@@ -16,6 +16,9 @@ export function escape(string: String): String {
     } else if char == '\r' {
       result += '\\'
       result += 'r'
+    } else if char == '\t' {
+      result += '\\'
+      result += 't'
     } else {
       if char == '"' || char == '\\'
         result += '\\'
@@ -42,6 +45,8 @@ export function unescape(string: String): String {
         result += '\n'
       else if char == 'r'
         result += '\r'
+      else if char == 't'
+        result += '\t'
       else
         result += char
     } else {

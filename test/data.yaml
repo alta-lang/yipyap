@@ -139,3 +139,9 @@ singleQuotedFun:
   - 'trailing spaces maybe?              '
   - 'trailing spaces maybe?              
      how about here?                     '
+
+noice: {
+  cool:[bar]
+}
+
+test: bar [ foo]
