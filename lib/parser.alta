@@ -151,12 +151,63 @@ export class Parser {
     if string.length < 2
       return trim()
     if string[0] == '"' {
-      string = unescape(string.substring(from: 1, to: string.length - 1))
-    } else if string[0] == '\'' {
+      trim()
       let newStr: String
+      let firstNewlineFound = false
+      let firstInLine = true
       for char: CodePoint in string.items {
-        if char != '\'' || newStr.length == 0 || newStr[newStr.length - 1] != '\'' {
+        if !firstNewlineFound && char == '\n' {
+          let trimIdx = newStr.length
+          while trimIdx > 0 && (newStr[trimIdx - 1] == ' ' || newStr[trimIdx - 1] == '\t')
+            trimIdx -= 1
+          newStr = newStr.substring(to: trimIdx)
+          firstNewlineFound = true
+          firstInLine = true
+        } else if firstNewlineFound && char != '\n' && !(newStr.length == 0 || newStr[newStr.length - 1] == '\n') {
+          if newStr[newStr.length - 1] == '\\'
+            newStr = newStr.substring(to: newStr.length - 1)
+          else
+            newStr += ' '
           newStr += char
+          firstNewlineFound = false
+          firstInLine = false
+        } else if firstNewlineFound && char == '\n' {
+          newStr += '\n'
+          firstInLine = true
+        } else {
+          firstNewlineFound = false
+          newStr += char
+          firstInLine = false
+        }
+      }
+      string = unescape(newStr.substring(from: 1, to: newStr.length - 1))
+    } else if string[0] == '\'' {
+      trim()
+      let newStr: String
+      let firstNewlineFound = false
+      let firstInLine = true
+      for char: CodePoint in string.items {
+        if !firstNewlineFound && char == '\n' {
+          let trimIdx = newStr.length
+          while trimIdx > 0 && (newStr[trimIdx - 1] == ' ' || newStr[trimIdx - 1] == '\t')
+            trimIdx -= 1
+          newStr = newStr.substring(to: trimIdx)
+          firstNewlineFound = true
+          firstInLine = true
+        } else if firstNewlineFound && char != '\n' && !(newStr.length == 0 || newStr[newStr.length - 1] == '\n') {
+          newStr += ' '
+          newStr += char
+          firstNewlineFound = false
+          firstInLine = false
+        } else if firstNewlineFound && char == '\n' {
+          newStr += '\n'
+          firstInLine = true
+        } else {
+          if char != '\'' || newStr.length == 0 || newStr[newStr.length - 1] != '\'' {
+            newStr += char
+          }
+          firstNewlineFound = false
+          firstInLine = false
         }
       }
       string = newStr.substring(from: 1, to: newStr.length - 1)
@@ -255,6 +306,7 @@ export class Parser {
     let startingBlockScalar = false
     let blockScalarInitialIndent: Size = 0
     let flowCollectionCount: Size = 0
+    let ignoringWhitespaceColumns = false
 
     let pushToken = (token: Token) => void {
       this.tokens.pushBack(token)
@@ -272,8 +324,7 @@ export class Parser {
     for char: CodePoint in this.input.items {
       let processIndent = false
 
-
-      if lastChar == '\n' && char == '\n' {
+      if lastChar == '\n' && char == '\n' && !inDoubleQuotedString && !inSingleQuotedString {
         pushUnprocessed()
         unprocessed.line = this.currentLine + 1
         unprocessed.column = 0
@@ -327,9 +378,11 @@ export class Parser {
       if handlingIndent && !processIndent {
         # do nothing
       } else if ignoringWhitespace && char == ' ' {
-        unprocessed.column = this.currentColumn + 1
+        if !ignoringWhitespaceColumns
+          unprocessed.column = this.currentColumn + 1
       } else {
         ignoringWhitespace = false
+        ignoringWhitespaceColumns = false
         if mightExitSingleQuotedString {
           printLine("might exit single quoted string...")
           if char != '\'' {
@@ -367,9 +420,15 @@ export class Parser {
         let atBoundary = (!lastTok || ((*lastTok).type != TokenType.Any) || (*lastTok).line != this.currentLine) && unprocessed.value.length == 0
         if inDoubleQuotedString {
           unprocessed += char
+          if char == '\n' {
+            printLine("newline found in double quoted string at ", this.currentLine + 1, ':', this.currentColumn + 1)
+            ignoringWhitespace = true
+            ignoringWhitespaceColumns = true
+          }
           if acceptNext {
             acceptNext = false
           } else if char == '"' {
+            printLine("ending double quoted string at ", this.currentLine + 1, ':', this.currentColumn + 1)
             inDoubleQuotedString = false
             checkIndents = true
             pushUnprocessed()
@@ -382,6 +441,8 @@ export class Parser {
             mightExitSingleQuotedString = false
           else if char == '\''
             mightExitSingleQuotedString = true
+          else if char == '\n'
+            ignoringWhitespace = true
         } else if checkingForArray {
           checkingForArray = false
           if char == ' ' {
@@ -439,6 +500,7 @@ export class Parser {
           checkingForArray = true
           unprocessed += char
         } else if atBoundary && char == '"' && !inBlockScalar {
+          printLine("starting double quoted string at ", this.currentLine + 1, ':', this.currentColumn + 1)
           inDoubleQuotedString = true
           checkIndents = false
           pushUnprocessed()

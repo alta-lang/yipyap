@@ -103,3 +103,39 @@ no final spaces: >-
   maybe...
 
 cool: 5
+doubleQuotedFun:
+  - "foo
+    bar
+    
+    no extra\
+    space
+
+    non-preserved trailing      
+    spaces
+    
+    preserved trailing    \
+    spaces"
+  - "        leading spaces maybe?"
+  - "        leading spaces maybe?
+                   how about here?"
+  - "trailing spaces maybe?              "
+  - "trailing spaces maybe?              
+     how about here?                     "
+singleQuotedFun:
+  - 'foo
+    bar
+    
+    cool\
+    but no escaping here
+    
+    non-preserved trailing      
+    spaces
+    
+    preserved here, but       \
+    the slash stays in (not special)'
+  - '        leading spaces maybe?'
+  - '        leading spaces maybe?
+                   how about here?'
+  - 'trailing spaces maybe?              '
+  - 'trailing spaces maybe?              
+     how about here?                     '
