@@ -1,0 +1,54 @@
+import CodePoint from "string"
+
+export function isPrintable(char: CodePoint): bool {
+  return char == '\t' ||
+         char == '\n' ||
+         char == '\r' ||
+         (char >= ' ' && char <= '~') ||
+         char == 0x85 || # unicode next line
+         # the rest are printable unicode characters:
+         (char >= 0xa0 && char <= 0xd7ff) ||
+         (char >= 0xe000 && char <= 0xfffd) ||
+         (char >= 0x10000 && char <= 0x10ffff)
+}
+
+export function isBOM(char: CodePoint): bool {
+  return char == 0xfeff
+}
+
+export function isBreaking(char: CodePoint): bool {
+  return char == '\r' || char == '\n'
+}
+
+export function isNonBreaking(char: CodePoint): bool {
+  return isPrintable(char) && !isBreaking(char) && !isBOM(char)
+}
+
+export function isWhitespace(char: CodePoint): bool {
+  return char == ' ' || char == '\t'
+}
+
+export function isNonBreakingJSON(char: CodePoint): bool {
+  return char == '\t' ||
+         (char >= ' ' && char <= 0x10ffff)
+}
+
+export function isNonWhitespace(char: CodePoint): bool {
+  return isNonBreaking(char) && !isWhitespace(char)
+}
+
+export function isIndicator(char: CodePoint): bool {
+  return char == '-' || char == '?' || char == ':'  || char == ',' ||
+         char == '[' || char == ']' || char == '{'  || char == '}' ||
+         char == '#' || char == '&' || char == '*'  || char == '!' ||
+         char == '|' || char == '>' || char == '\'' || char == '"' ||
+         char == '%' || char == '@' || char == '`'
+}
+
+export function isFlowIndicator(char: CodePoint): bool {
+  return char == ',' || char == '[' || char == ']' || char == '{' || char == '}'
+}
+
+export function isAnchorCharacter(char: CodePoint): bool {
+  return isNonWhitespace(char) && !isFlowIndicator(char)
+}

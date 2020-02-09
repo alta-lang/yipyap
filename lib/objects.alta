@@ -163,3 +163,22 @@ export class String extends Node, AltaString {
     return "!!str \"" + escape(super<AltaString>) + '\"'
   }
 }
+
+export class Alias extends Node {
+  private var target: NodeBox
+
+  public constructor(target: NodeBox) {
+    super()
+    this.target = target
+  }
+
+  protected @override function equals(other: ref Node): bool {
+    return (other instanceof Alias) ? this.target == (other as ref Alias).target : this.target == other
+  }
+  public @override function toString(indent: Size): AltaString {
+    # for now we just return the target's stringification
+    # in the future, though, the target will be properly named
+    # and we'll simply return an anchor
+    return (this.target as ref Node).toString(indent)
+  }
+}

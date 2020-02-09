@@ -1,0 +1,22 @@
+foo: &hi-there some random test content
+bar: *hi-there
+
+complex block map: &my-map
+  foo: bar
+  longer key name: it still works
+  some: >
+    basic plain block
+    text (which is folded)
+  referencing another: *hi-there
+
+reusing complex block:
+  as a contained value: *my-map
+
+inline array thing: &my_array [
+  my cool,
+  {
+    items: here
+  }
+]
+
+this is: *my_array

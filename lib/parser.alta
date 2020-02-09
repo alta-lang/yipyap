@@ -8,6 +8,8 @@ import escape, unescape from "util.alta"
 import "objects.alta" as YAML
 import Vector from "vector"
 import parseNumber from "util"
+import "chars.alta" as YAMLChars
+import Map from "map"
 
 export class MisalignedIndentation extends Exception {}
 export class InvalidCharacter extends Exception {}
@@ -15,6 +17,7 @@ export class ExpectedIndent extends Exception {}
 export class UnexpectedExit extends Exception {}
 export class InvalidBlockSequenceLocation extends Exception {}
 export class UnexpectedToken extends Exception {}
+export class UndefinedAlias extends Exception {}
 
 enum TokenType: Size {
   Any,
@@ -29,6 +32,8 @@ enum TokenType: Size {
   SequenceEndIndicator,
   ItemSeparator,
   ComplexKeyIndicator,
+  AnchorName,
+  AliasName,
   EOF,
 }
 
@@ -90,6 +95,7 @@ class Level {
   public var gettingKey = false
   public var isComplexKey = false
   public var lineOfLastToken: Size = 0
+  public var anchorFor: String = ""
 
   public constructor() {}
   public constructor(rule: Rule) {
@@ -308,6 +314,7 @@ export class Parser {
     let flowCollectionCount: Size = 0
     let ignoringWhitespaceColumns = false
     let goToNextCharacter = true
+    let inAnchorOrAliasName = false
 
     let pushToken = (token: Token) => void {
       this.tokens.pushBack(token)
@@ -449,6 +456,15 @@ export class Parser {
             mightExitSingleQuotedString = true
           else if char == '\n'
             ignoringWhitespace = true
+        } else if inAnchorOrAliasName {
+          if !YAMLChars.isAnchorCharacter(char) {
+            goToNextCharacter = false
+            inAnchorOrAliasName = false
+            pushUnprocessed()
+            ignoringWhitespace = true
+          } else {
+            unprocessed += char
+          }
         } else if checkingForArray {
           checkingForArray = false
           if char == ' ' {
@@ -552,6 +568,10 @@ export class Parser {
           startingBlockScalar = true
           blockScalarInitialIndent = indents.top
           unprocessed += char
+        } else if (char == '&' || char == '*') && lastTok && (*lastTok).type == TokenType.KeyValueSeparator {
+          pushUnprocessed()
+          inAnchorOrAliasName = true
+          unprocessed.type = (char == '&') ? TokenType.AnchorName : TokenType.AliasName
         } else {
           unprocessed += char
         }
@@ -583,7 +603,8 @@ export class Parser {
 
     let it = this.tokens.items
     let lastNode: YAML.NodeBox = nullptr
-    let tok: (ref Token)? = it.next()
+    let tok = it.next()
+    let anchors = new Map<String, YAML.NodeBox>
 
     while tok {
       let token = *tok
@@ -612,6 +633,10 @@ export class Parser {
         printLine("EOF found")
       else if token.type == TokenType.ComplexKeyIndicator
         printLine("complex key indicator found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.AnchorName
+        printLine("anchor name (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
+      else if token.type == TokenType.AliasName
+        printLine("alias name (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
       else
         printLine("token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
 
@@ -733,6 +758,8 @@ export class Parser {
               first = true
               level.rule = Rule.Scalar
               level.node = new* YAML.String
+              if level.anchorFor
+                anchors[level.anchorFor] = level.node
             }
             if goToNextToken {
               let str = level.node as ref YAML.String
@@ -763,6 +790,8 @@ export class Parser {
               let reassignRoot = this.root == level.node
               level.cache.push(level.node as ref YAML.String)
               level.node = new* YAML.Mapping
+              if level.anchorFor
+                anchors[level.anchorFor] = level.node
               if reassignRoot
                 this.root = level.node
               printLine("level.rule was ", level.rule)
@@ -784,6 +813,8 @@ export class Parser {
           if level.rule == Rule.Expression {
             let reassignRoot = this.root == level.node
             level.node = new* YAML.Sequence
+            if level.anchorFor
+              anchors[level.anchorFor] = level.node
             if reassignRoot
               this.root = level.node
             level.rule = Rule.Sequence
@@ -810,14 +841,20 @@ export class Parser {
         } else if token.type == TokenType.MappingStartIndicator {
           level.rule = Rule.FlowMapping
           level.node = new* YAML.Mapping
+          if level.anchorFor
+            anchors[level.anchorFor] = level.node
         } else if token.type == TokenType.SequenceStartIndicator {
           level.rule = Rule.FlowSequence
           level.node = new* YAML.Sequence
           level.checkForEnd = true
+          if level.anchorFor
+            anchors[level.anchorFor] = level.node
         } else if token.type == TokenType.ComplexKeyIndicator {
           if level.rule == Rule.Expression {
             let reassignRoot = this.root == level.node
             level.node = new* YAML.Mapping
+            if level.anchorFor
+              anchors[level.anchorFor] = level.node
             if reassignRoot
               this.root = level.node
             level.rule = Rule.Mapping
@@ -833,6 +870,16 @@ export class Parser {
             levels.push(new Level(Rule.Expression))
             levels.top.isComplexKey = true
           }
+        } else if token.type == TokenType.AnchorName {
+          if level.node
+            throw new UnexpectedToken
+          level.anchorFor = token.value
+        } else if token.type == TokenType.AliasName {
+          if level.node
+            throw new UnexpectedToken
+          if !anchors.has(token.value)
+            throw new UndefinedAlias
+          level.node = new* YAML.Alias(anchors[token.value])
         }
       }
 
