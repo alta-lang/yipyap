@@ -25,5 +25,5 @@ steps:
     & "$(Alta.Compiler.Path)" -c -v
   displayName: "Compile the library"
 - pwsh: |
-    & "$(Alta.Compiler.Path)" -c -ot exe "test/yipyap-test.alta" -v
+    & "$(Alta.Compiler.Path)" -c -ot exe "tests/yipyap-test.alta" -v
   displayName: "Compile the simple test executable"
