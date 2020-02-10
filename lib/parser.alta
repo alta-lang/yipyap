@@ -96,6 +96,7 @@ class Level {
   public var isComplexKey = false
   public var lineOfLastToken: Size = 0
   public var anchorFor: String = ""
+  public var columnOfLastToken: Size = 0
 
   public constructor() {}
   public constructor(rule: Rule) {
@@ -141,7 +142,6 @@ export class Parser {
 
   public function process(string: ref YAML.String): void {
     let trim = () => void {
-      printLine("trimming it...")
       let newStr: String
       let start: Size = 0
       let end: Size = string.length
@@ -151,8 +151,6 @@ export class Parser {
         end -= 1
       string = string.substring(from: start, to: end)
     }
-
-    printLine("now processing: \"", escape(string), '"')
 
     if string.length < 2
       return trim()
@@ -370,9 +368,7 @@ export class Parser {
           }
           pushToken(new Token(TokenType.Indent, this.currentLine, this.currentColumn - spacesFound, str))
         } else {
-          printLine("starting outdent loop; indents.top = ", indents.top, "; spacesFound = ", spacesFound, "; location = ", this.currentLine + 1, ':', this.currentColumn + 1)
           while indents.length > 1 && spacesFound < indents.top {
-            printLine("popping indent with ", indents.top, " spaces")
             indents.pop()
             let str: String
             for i: Size in 0..indents.top {
@@ -380,7 +376,6 @@ export class Parser {
             }
             pushToken(new Token(TokenType.Outdent, this.currentLine, this.currentColumn, str))
           }
-          printLine("finished outdent loop with indents.top = ", indents.top, " and spacesFound = ", spacesFound)
           if spacesFound > indents.top
             throw new MisalignedIndentation
         }
@@ -396,9 +391,7 @@ export class Parser {
         ignoringWhitespace = false
         ignoringWhitespaceColumns = false
         if mightExitSingleQuotedString {
-          printLine("might exit single quoted string...")
           if char != '\'' {
-            printLine("exiting single quoted string.")
             checkIndents = true
             inSingleQuotedString = false
             mightExitSingleQuotedString = false
@@ -411,7 +404,6 @@ export class Parser {
         }
         if inBlockScalar {
           if startingBlockScalar {
-            printLine("handling block scalar header")
             if !((unprocessed.value.length == 1 && (char == '+' || char == '-')) || (char >= '0' && char <= '9')) {
               startingBlockScalar = false
               let explicitStr = unprocessed.value.substring(from: (unprocessed.value.length > 1 && (unprocessed.value[1] == '+' || unprocessed.value[1] == '-')) ? 2 : 1)
@@ -434,14 +426,12 @@ export class Parser {
         if inDoubleQuotedString {
           unprocessed += char
           if char == '\n' {
-            printLine("newline found in double quoted string at ", this.currentLine + 1, ':', this.currentColumn + 1)
             ignoringWhitespace = true
             ignoringWhitespaceColumns = true
           }
           if acceptNext {
             acceptNext = false
           } else if char == '"' {
-            printLine("ending double quoted string at ", this.currentLine + 1, ':', this.currentColumn + 1)
             inDoubleQuotedString = false
             checkIndents = true
             pushUnprocessed()
@@ -490,7 +480,6 @@ export class Parser {
           let lastChar = unprocessed.value.length > 1 ? unprocessed.value[unprocessed.value.length - 2] : ((!lastTok || (*lastTok).value.length == 0) ? '\0' as CodePoint : (*lastTok).value[(*lastTok).value.length - 1])
           if (flowCollectionCount > 0 && (lastChar == '"' || char == '"' || char == '[' || char == '{')) || char == ' ' || char == '\n' {
             unprocessed.value = unprocessed.value.substring(length: unprocessed.value.length - 1)
-            printLine("unprocessed = ", unprocessed.value, "; unprocessed.column = ", unprocessed.column, "; indents.top = ", indents.top)
             if indents.length == 0 || (unprocessed.column > indents.top && unprocessed.value.length > 0) {
               indents.push(unprocessed.column)
               let str: String
@@ -522,11 +511,9 @@ export class Parser {
           checkingForSeparator = true
           unprocessed += char
         } else if atBoundary && char == '-' {
-          printLine("checking for an array at ", this.currentLine + 1, ':', this.currentColumn + 1)
           checkingForArray = true
           unprocessed += char
         } else if atBoundary && char == '"' && !inBlockScalar {
-          printLine("starting double quoted string at ", this.currentLine + 1, ':', this.currentColumn + 1)
           inDoubleQuotedString = true
           checkIndents = false
           pushUnprocessed()
@@ -562,7 +549,6 @@ export class Parser {
           pushToken(new Token(TokenType.ComplexKeyIndicator, this.currentLine, this.currentColumn))
           ignoringWhitespace = true
         } else if atBoundary && (char == '>' || char == '|') {
-          printLine("handling block at ", this.currentLine + 1, ':', this.currentColumn + 1)
           pushUnprocessed()
           inBlockScalar = true
           startingBlockScalar = true
@@ -671,7 +657,6 @@ export class Parser {
             tmp = (lastNode as ref YAML.Node).toString()
           else
             tmp = new String("<unknown>")
-          printLine("coming back from handed off rule; result is ", tmp)
           if (lastNode as ref YAML.Node) instanceof YAML.String
             this.process(lastNode as ref YAML.String)
           if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
@@ -716,7 +701,6 @@ export class Parser {
           if level.rule != Rule.FlowMapping && level.rule != Rule.FlowSequence
             level.currentAddedSpaces = token.value.length
         } else if level.needsSeparator {
-          printLine("needing separator... found ", token.type, "; current rule = ", level.rule)
           if token.type == TokenType.ItemSeparator {
             level.needsSeparator = false
             if level.rule == Rule.FlowSequence
@@ -742,14 +726,12 @@ export class Parser {
           goToNextToken = false
         } else if token.type == TokenType.Scalar || token.type == TokenType.Any {
           if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
-            printLine("caching a token: ", token.value)
             level.cache.push(new* YAML.String(token))
             this.process(level.cache.last as ref YAML.String)
           } else {
             let first = false
             if level.node {
-              printLine("found scalar and node; current added spaces = ", level.currentAddedSpaces)
-              if level.currentAddedSpaces == 0 {
+              if level.currentAddedSpaces == 0 && token.column < level.columnOfLastToken {
                 lastNode = level.node
                 levels.pop()
                 goToNextToken = false
@@ -764,8 +746,6 @@ export class Parser {
             if goToNextToken {
               let str = level.node as ref YAML.String
               if !first {
-                printLine("last line = ", level.lineOfLastToken + 1)
-                printLine("current line = ", token.line + 1)
                 for i: Size in level.lineOfLastToken..token.line {
                   str += '\n'
                 }
@@ -777,6 +757,7 @@ export class Parser {
               }
               str += token.value
               level.lineOfLastToken = token.line
+              level.columnOfLastToken = token.column
             }
           }
         } else if token.type == TokenType.KeyValueSeparator {
@@ -786,7 +767,6 @@ export class Parser {
               levels.pop()
               goToNextToken = false
             } else {
-              printLine("creating a brand new mapping from ", (level.node as ref YAML.Node).toString())
               let reassignRoot = this.root == level.node
               level.cache.push(level.node as ref YAML.String)
               level.node = new* YAML.Mapping
@@ -794,13 +774,10 @@ export class Parser {
                 anchors[level.anchorFor] = level.node
               if reassignRoot
                 this.root = level.node
-              printLine("level.rule was ", level.rule)
               level.rule = Rule.Mapping
-              printLine("level.rule is now ", level.rule)
             }
           }
           if goToNextToken {
-            printLine("handing off...")
             level.handedOff = true
             levels.push(new Level(Rule.Expression))
             if level.rule == Rule.FlowMapping
@@ -864,7 +841,6 @@ export class Parser {
             goToNextToken = false
           }
           if goToNextToken {
-            printLine("handing off to a complex key...")
             level.handedOff = true
             level.gettingKey = true
             levels.push(new Level(Rule.Expression))

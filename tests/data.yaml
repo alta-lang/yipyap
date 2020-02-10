@@ -145,3 +145,14 @@ noice: {
 }
 
 test: bar [ foo]
+
+plain block scalar:
+  here's a thing
+  and it should work
+and then: after?
+what about: this and
+  it continues
+
+  what about with newlines
+  huh? does it work?
+and after: wards?
