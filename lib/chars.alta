@@ -52,3 +52,15 @@ export function isFlowIndicator(char: CodePoint): bool {
 export function isAnchorCharacter(char: CodePoint): bool {
   return isNonWhitespace(char) && !isFlowIndicator(char)
 }
+
+export function isDecimalDigit(char: CodePoint): bool {
+  return char >= '0' && char <= '9'
+}
+
+export function isASCIILetter(char: CodePoint): bool {
+  return (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z')
+}
+
+export function isWordCharacter(char: CodePoint): bool {
+  return isDecimalDigit(char) || isASCIILetter(char) || char == '-'
+}

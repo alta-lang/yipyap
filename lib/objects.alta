@@ -16,12 +16,28 @@ function spacesFor(indent: Size): AltaString {
 }
 
 export class Node {
+  protected var currentTag: AltaString? = null
+
+  # TODO: make this a write accessor once they're added to Alta
+  public function _tag(tag: AltaString): void {
+    if tag != this.defaultTag
+      this.currentTag = tag
+  }
+
+  protected @virtual @read function defaultTag(): AltaString {
+    return "tag:org.alta-lang.yipyap,2020:unknown"
+  }
+  public @read function tag(): AltaString {
+    return this.currentTag ? *this.currentTag : this.defaultTag
+  }
+
   protected @virtual function equals(other: ref Node): bool {
     return true
   }
   public @virtual function toString(indent: Size): AltaString {
     return ""
   }
+
   public function toString(): AltaString {
     return this.toString(0)
   }
@@ -68,6 +84,9 @@ export class NodeBox extends Box<Node> {
 }
 
 export class Mapping extends Node, Map<NodeBox, NodeBox> {
+  protected @override @read function defaultTag(): AltaString {
+    return "tag:yaml.org,2002:map"
+  }
   protected @override function equals(other: ref Node): bool {
     if !(other instanceof Mapping)
       return false
@@ -90,7 +109,7 @@ export class Mapping extends Node, Map<NodeBox, NodeBox> {
     let result: AltaString
     let spaces = spacesFor(indent)
 
-    result += "!!map {\n"
+    result += "!<" + this.tag + "> {\n"
 
     for key: NodeBox in this.keys.items {
       result += spaces + "  ? "
@@ -106,6 +125,9 @@ export class Mapping extends Node, Map<NodeBox, NodeBox> {
 }
 
 export class Sequence extends Node, Vector<NodeBox> {
+  protected @override @read function defaultTag(): AltaString {
+    return "tag:yaml.org,2002:seq"
+  }
   protected @override function equals(other: ref Node): bool {
     if !(other instanceof Sequence)
       return false
@@ -126,7 +148,7 @@ export class Sequence extends Node, Vector<NodeBox> {
     let result: AltaString
     let spaces = spacesFor(indent)
 
-    result += "!!seq [\n"
+    result += "!<" + this.tag + "> [\n"
 
     for item: NodeBox in this.items {
       result += spaces + "  " + (item as ref Node).toString(indent + 2) + ",\n"
@@ -148,6 +170,9 @@ export class String extends Node, AltaString {
     super<AltaString>(string)
   }
 
+  protected @override @read function defaultTag(): AltaString {
+    return "tag:yaml.org,2002:str"
+  }
   protected @override function equals(other: ref Node): bool {
     if !(other instanceof String)
       return false
@@ -160,7 +185,7 @@ export class String extends Node, AltaString {
     return true
   }
   public @override function toString(indent: Size): AltaString {
-    return "!!str \"" + escape(super<AltaString>) + '\"'
+    return "!<" + this.tag + "> \"" + escape(super<AltaString>) + '\"'
   }
 }
 
@@ -172,6 +197,9 @@ export class Alias extends Node {
     this.target = target
   }
 
+  protected @override @read function defaultTag(): AltaString {
+    return (this.target as ref Node).defaultTag
+  }
   protected @override function equals(other: ref Node): bool {
     return (other instanceof Alias) ? this.target == (other as ref Alias).target : this.target == other
   }
