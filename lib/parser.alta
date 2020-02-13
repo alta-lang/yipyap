@@ -10,6 +10,8 @@ import Vector from "vector"
 import parseNumber from "util"
 import "chars.alta" as YAMLChars
 import Map from "map"
+import TagResolver from "tags.alta"
+import Box from "memory"
 
 export class MisalignedIndentation extends Exception {}
 export class InvalidCharacter extends Exception {}
@@ -18,6 +20,7 @@ export class UnexpectedExit extends Exception {}
 export class InvalidBlockSequenceLocation extends Exception {}
 export class UnexpectedToken extends Exception {}
 export class UndefinedAlias extends Exception {}
+export class UnresolvedHandle extends Exception {}
 
 enum TokenType: Size {
   Any,
@@ -130,8 +133,7 @@ export class Parser {
   private var currentLine: Size = 0
   private var currentColumn: Size = 0
 
-  public var primaryNamespace: String = "!"
-  public var secondaryNamespace: String = "tag:yaml.org,2002:"
+  public var tagResolver = new Box<TagResolver>(new* TagResolver)
 
   public function feed(input: String): void {
     this.input += input
@@ -146,7 +148,6 @@ export class Parser {
   }
 
   private function process(string: ref YAML.String): void {
-    let tag = string.tag
     let trim = () => void {
       let newStr: String
       let start: Size = 0
@@ -156,7 +157,6 @@ export class Parser {
       while end > 0 && isWhitespace(string[end - 1])
         end -= 1
       string = string.substring(from: start, to: end)
-      string._tag(tag)
     }
 
     if string.length < 2
@@ -293,10 +293,27 @@ export class Parser {
     } else {
       trim()
     }
-    string._tag(tag)
   }
 
   private function resolveTag(tag: String): String {
+    let tagger = this.tagResolver as ref TagResolver
+    let markIdx = tag.indexOf('!')
+    if markIdx != SizeMaximum {
+      let handle = tag.substring(0, to: markIdx)
+      let rest = tag.substring(markIdx + 1)
+      # handle `!<whatever>`
+      if rest.length > 1 && rest[0] == '<' && rest[rest.length - 1] == '>'
+        return rest.substring(from: 1, to: rest.length - 1)
+      # handle `!my-handle!my-thing
+      if handle {
+        if !tagger.namespaces.has(handle)
+          throw new UnresolvedHandle
+        return tagger.namespaces[handle] + rest
+      } else {
+        # handle `!!my-thing`
+        return tagger.secondaryNamespace + rest
+      }
+    }
     return tag
   }
 
@@ -756,7 +773,9 @@ export class Parser {
           goToNextToken = false
         } else if token.type == TokenType.Scalar || token.type == TokenType.Any {
           if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
-            level.cache.push(new* YAML.String(token))
+            let str = new* YAML.String(token)
+            str.tagResolver = this.tagResolver
+            level.cache.push(str)
             this.process(level.cache.last as ref YAML.String)
           } else {
             let first = false
@@ -770,6 +789,7 @@ export class Parser {
               first = true
               level.rule = Rule.Scalar
               level.node = new* YAML.String
+              ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
               if level.associatedTag {
                 (level.node as ref YAML.Node)._tag(level.associatedTag)
               }
@@ -803,6 +823,7 @@ export class Parser {
               let reassignRoot = this.root == level.node
               level.cache.push(level.node as ref YAML.String)
               level.node = new* YAML.Mapping
+              ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
               if level.associatedTag {
                 (level.node as ref YAML.Node)._tag(level.associatedTag)
               }
@@ -826,6 +847,7 @@ export class Parser {
           if level.rule == Rule.Expression {
             let reassignRoot = this.root == level.node
             level.node = new* YAML.Sequence
+            ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
             if level.associatedTag {
               (level.node as ref YAML.Node)._tag(level.associatedTag)
             }
@@ -857,6 +879,7 @@ export class Parser {
         } else if token.type == TokenType.MappingStartIndicator {
           level.rule = Rule.FlowMapping
           level.node = new* YAML.Mapping
+          ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
           if level.associatedTag {
             (level.node as ref YAML.Node)._tag(level.associatedTag)
           }
@@ -865,6 +888,7 @@ export class Parser {
         } else if token.type == TokenType.SequenceStartIndicator {
           level.rule = Rule.FlowSequence
           level.node = new* YAML.Sequence
+          ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
           level.checkForEnd = true
           if level.associatedTag {
             (level.node as ref YAML.Node)._tag(level.associatedTag)
@@ -875,6 +899,7 @@ export class Parser {
           if level.rule == Rule.Expression {
             let reassignRoot = this.root == level.node
             level.node = new* YAML.Mapping
+            ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
             if level.associatedTag {
               (level.node as ref YAML.Node)._tag(level.associatedTag)
             }
@@ -904,6 +929,7 @@ export class Parser {
           if !anchors.has(token.value)
             throw new UndefinedAlias
           level.node = new* YAML.Alias(anchors[token.value])
+          ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
         } else if token.type == TokenType.TagName {
           if level.node
             throw new UnexpectedToken

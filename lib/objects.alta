@@ -4,6 +4,8 @@ import String as AltaString from "string"
 import Box from "memory"
 import Size from "types"
 import escape from "util.alta"
+import TagResolver from "tags.alta"
+import Pair from "util"
 
 function spacesFor(indent: Size): AltaString {
   let result: AltaString
@@ -17,6 +19,7 @@ function spacesFor(indent: Size): AltaString {
 
 export class Node {
   protected var currentTag: AltaString? = null
+  public var tagResolver: Box<TagResolver> = nullptr
 
   # TODO: make this a write accessor once they're added to Alta
   public function _tag(tag: AltaString): void {
@@ -27,8 +30,23 @@ export class Node {
   protected @virtual @read function defaultTag(): AltaString {
     return "tag:org.alta-lang.yipyap,2020:unknown"
   }
+
   public @read function tag(): AltaString {
     return this.currentTag ? *this.currentTag : this.defaultTag
+  }
+  public @read function cannonicalTag(): AltaString {
+    if !this.tagResolver
+      return "!<" + this.tag + '>'
+    let tagger = this.tagResolver as ref TagResolver
+    if this.tag.substring(0, length: tagger.primaryNamespace.length) == tagger.primaryNamespace
+      return '!' + this.tag.substring(from: tagger.primaryNamespace.length)
+    if this.tag.substring(0, length: tagger.secondaryNamespace.length) == tagger.secondaryNamespace
+      return "!!" + this.tag.substring(from: tagger.secondaryNamespace.length)
+    for entry: Pair<AltaString, AltaString> in tagger.namespaces.items {
+      if this.tag.substring(0, length: entry.second.length) == entry.second
+        return '!' + entry.first + '!' + this.tag.substring(from: entry.second.length)
+    }
+    return "!<" + this.tag + '>'
   }
 
   protected @virtual function equals(other: ref Node): bool {
@@ -109,7 +127,7 @@ export class Mapping extends Node, Map<NodeBox, NodeBox> {
     let result: AltaString
     let spaces = spacesFor(indent)
 
-    result += "!<" + this.tag + "> {\n"
+    result += this.cannonicalTag + " {\n"
 
     for key: NodeBox in this.keys.items {
       result += spaces + "  ? "
@@ -148,7 +166,7 @@ export class Sequence extends Node, Vector<NodeBox> {
     let result: AltaString
     let spaces = spacesFor(indent)
 
-    result += "!<" + this.tag + "> [\n"
+    result += this.cannonicalTag + " [\n"
 
     for item: NodeBox in this.items {
       result += spaces + "  " + (item as ref Node).toString(indent + 2) + ",\n"
@@ -160,14 +178,27 @@ export class Sequence extends Node, Vector<NodeBox> {
   }
 }
 
+# TODO: wrap AltaString methods to return copies of YAML strings (with all the YAML info)
 export class String extends Node, AltaString {
   public constructor() {
     super<Node>()
     super<AltaString>()
   }
-  public @from constructor(string: AltaString) {
+  public constructor(string: AltaString) {
     super<Node>()
     super<AltaString>(string)
+  }
+  public constructor(string: AltaString, tag: AltaString) {
+    super<Node>()
+    super<AltaString>(string)
+    this._tag(tag)
+  }
+
+  # this is an operator to preserve our YAML information when simple assignment
+  # is performed to overwrite our string content
+  public this = AltaString: ref String {
+    super<AltaString> = $
+    return this
   }
 
   protected @override @read function defaultTag(): AltaString {
@@ -185,7 +216,7 @@ export class String extends Node, AltaString {
     return true
   }
   public @override function toString(indent: Size): AltaString {
-    return "!<" + this.tag + "> \"" + escape(super<AltaString>) + '\"'
+    return this.cannonicalTag + " \"" + escape(super<AltaString>) + '\"'
   }
 }
 

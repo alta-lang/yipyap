@@ -1,0 +1,15 @@
+import String from "string"
+import Map from "map"
+
+export class TagResolver {
+  public var primaryNamespace: String = "!"
+  public var secondaryNamespace: String = "tag:yaml.org,2002:"
+  public var namespaces = new Map<String, String>
+
+  public constructor() {
+    # always register a namespace by default for yipyap-specific types
+    this.namespaces["yipyap"] = "tag:org.alta-lang.yipyap,2020:"
+    # and another for yaml-specific types
+    this.namespaces["yaml"] = "tag:yaml.org,2002:"
+  }
+}
