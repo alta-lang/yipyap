@@ -13,6 +13,8 @@ import Map from "map"
 import TagResolver from "tags.alta"
 import Box from "memory"
 
+##define DEBUG true
+
 export class MisalignedIndentation extends Exception {}
 export class InvalidCharacter extends Exception {}
 export class ExpectedIndent extends Exception {}
@@ -454,7 +456,9 @@ export class Parser {
         }
         let flowBoundary = (!lastTok || ((*lastTok).type != TokenType.Any) || (*lastTok).line != this.currentLine) && flowCollectionCount > 0
         let atBoundary = (!lastTok || ((*lastTok).type != TokenType.Any) || (*lastTok).line != this.currentLine) && unprocessed.value.length == 0
-        if inDoubleQuotedString {
+        if inComment {
+          # do nothing
+        } else if inDoubleQuotedString {
           unprocessed += char
           if char == '\n' {
             ignoringWhitespace = true
@@ -640,38 +644,40 @@ export class Parser {
     while tok {
       let token = *tok
 
-      if token.type == TokenType.Indent
-        printLine("indent token of ", token.value.length, " spaces found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.Outdent
-        printLine("outdent token of ", token.value.length, " spaces found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.SequenceIndicator
-        printLine("sequence indicator found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.KeyValueSeparator
-        printLine("key value separator found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.Scalar
-        printLine("scalar token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
-      else if token.type == TokenType.MappingStartIndicator
-        printLine("mapping start indicator found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.MappingEndIndicator
-        printLine("mapping end indicator found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.SequenceStartIndicator
-        printLine("sequence start indicator found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.SequenceEndIndicator
-        printLine("sequence end indicator found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.ItemSeparator
-        printLine("item separator found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.EOF
-        printLine("EOF found")
-      else if token.type == TokenType.ComplexKeyIndicator
-        printLine("complex key indicator found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.AnchorName
-        printLine("anchor name (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.AliasName
-        printLine("alias name (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
-      else if token.type == TokenType.TagName
-        printLine("tag name (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
-      else
-        printLine("token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
+      ##if DEBUG
+        if token.type == TokenType.Indent
+          printLine("indent token of ", token.value.length, " spaces found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.Outdent
+          printLine("outdent token of ", token.value.length, " spaces found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.SequenceIndicator
+          printLine("sequence indicator found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.KeyValueSeparator
+          printLine("key value separator found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.Scalar
+          printLine("scalar token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
+        else if token.type == TokenType.MappingStartIndicator
+          printLine("mapping start indicator found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.MappingEndIndicator
+          printLine("mapping end indicator found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.SequenceStartIndicator
+          printLine("sequence start indicator found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.SequenceEndIndicator
+          printLine("sequence end indicator found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.ItemSeparator
+          printLine("item separator found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.EOF
+          printLine("EOF found")
+        else if token.type == TokenType.ComplexKeyIndicator
+          printLine("complex key indicator found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.AnchorName
+          printLine("anchor name (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.AliasName
+          printLine("alias name (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.TagName
+          printLine("tag name (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
+        else
+          printLine("token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
+      ##end if
 
       if levels.length == 0 {
         if token.type != TokenType.EOF
@@ -930,6 +936,8 @@ export class Parser {
             throw new UndefinedAlias
           level.node = new* YAML.Alias(anchors[token.value])
           ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
+          lastNode = level.node
+          levels.pop()
         } else if token.type == TokenType.TagName {
           if level.node
             throw new UnexpectedToken
