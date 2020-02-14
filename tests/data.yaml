@@ -158,3 +158,10 @@ what about: this and
 and after: wards?
 
 tag time!: !my-greeting bonjour
+
+? !my-cool-key-type my cool key!
+: awesome key, bro
+
+pointy: &thing this is basically a pointer like in C
+? *thing
+: it can be used as a key

@@ -598,11 +598,36 @@ export class Parser {
           startingBlockScalar = true
           blockScalarInitialIndent = indents.top
           unprocessed += char
-        } else if atBoundary && (!lastTok || (*lastTok).type == TokenType.KeyValueSeparator || (*lastTok).type == TokenType.TagName) && (char == '&' || char == '*') {
+        } else if (
+          atBoundary &&
+          (
+            !lastTok ||
+            (*lastTok).type == TokenType.KeyValueSeparator ||
+            (*lastTok).type == TokenType.TagName ||
+            (*lastTok).type == TokenType.ItemSeparator ||
+            (*lastTok).type == TokenType.SequenceStartIndicator ||
+            (*lastTok).type == TokenType.ComplexKeyIndicator
+          ) &&
+          (
+            char == '&' ||
+            char == '*'
+          )
+        ) {
           pushUnprocessed()
           inAnchorOrAliasName = true
           unprocessed.type = (char == '&') ? TokenType.AnchorName : TokenType.AliasName
-        } else if atBoundary && (!lastTok || (*lastTok).type == TokenType.KeyValueSeparator || (*lastTok).type == TokenType.AnchorName) && char == '!' {
+        } else if (
+          atBoundary &&
+          (
+            !lastTok ||
+            (*lastTok).type == TokenType.KeyValueSeparator ||
+            (*lastTok).type == TokenType.AnchorName ||
+            (*lastTok).type == TokenType.ItemSeparator ||
+            (*lastTok).type == TokenType.SequenceStartIndicator ||
+            (*lastTok).type == TokenType.ComplexKeyIndicator
+          ) &&
+          char == '!'
+        ) {
           pushUnprocessed()
           inTagName = true
           inTagHandle = true
