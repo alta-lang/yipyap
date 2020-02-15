@@ -165,3 +165,26 @@ tag time!: !my-greeting bonjour
 pointy: &thing this is basically a pointer like in C
 ? *thing
 : it can be used as a key
+
+these should be null:
+  - null
+  - Null
+  - NULL
+  - ~
+  -
+
+these should be floats:
+  - 3.14 # first three digits of Pi
+  - 2.718 # first four digits of Euler's number (e)
+  - 3e4 # 3*10**4 = 30000
+  - 3.14e-2 # 3.14*10**-2 = 0.0314
+  - .489
+
+this should NOT be parsed: !!str 4
+?
+: this has a null complex key
+this has a null value:
+this thing: {
+  has some null entries: ,
+  : this has a null key,
+}

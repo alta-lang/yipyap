@@ -1,0 +1,165 @@
+import Vector from "vector"
+import String, CodePoint from "string"
+import "objects.alta" as YAML
+import parseNumber from "util"
+import NAN, INFINITY from "libc/lib/math"
+import power from "math"
+import Int64, Size from "types"
+
+export type Processor = (String) => YAML.NodeBox?
+
+export function jsonSchemaFactory(): Vector<Processor> {
+  return new Vector<Processor>(items:
+    # null
+    (content: String) => YAML.NodeBox? {
+      if content == "null"
+        return new* YAML.Null
+      return null
+    },
+    # bool
+    (content: String) => YAML.NodeBox? {
+      if content == "true"
+        return new* YAML.Boolean(true)
+      else if content == "false"
+        return new* YAML.Boolean(false)
+      return null
+    },
+    # floating point or integer
+    (content: String) => YAML.NodeBox? {
+      if content.length < 1
+        return null
+
+      if content == ".inf" || content == "+.inf"
+        return new* YAML.FloatingPoint(INFINITY)
+      else if content == "-.inf"
+        return new* YAML.FloatingPoint(-INFINITY)
+      else if content == ".nan"
+        return new* YAML.FloatingPoint(NAN)
+
+      let i: Size = 0
+      let neg = false
+      let negExponent = false
+      let wholeString: String
+      let fractionString: String
+      let exponentString: String
+
+      if content[i] == '-' {
+        i += 1
+        neg = true
+      } else if content[i] == '+' {
+        i += 1
+      }
+
+      if i >= content.length
+        return null
+
+      while i < content.length && content[i] >= '0' && content[i] <= '9' {
+        wholeString += content[i]
+        i += 1
+      }
+
+      if i < content.length {
+        if content[i] == '.' {
+          i += 1
+          if i >= content.length
+            return null
+          while i < content.length && content[i] >= '0' && content[i] <= '9' {
+            fractionString += content[i]
+            i += 1
+          }
+        }
+        if i < content.length {
+          if content[i] == 'e' || content[i] == 'E' {
+            i += 1
+            if i >= content.length
+              return null
+            if content[i] == '-' {
+              i += 1
+              negExponent = true
+            } else if content[i] == '+' {
+              i += 1
+            }
+            if i >= content.length
+              return null
+            while i < content.length && content[i] >= '0' && content[i] <= '9' {
+              exponentString += content[i]
+              i += 1
+            }
+          }
+        }
+      }
+
+      if i < content.length
+        return null
+
+      if neg
+        wholeString ^= '-'
+
+      if negExponent
+        exponentString ^= '-'
+
+      if fractionString.length == 0 && exponentString.length == 0
+        return new* YAML.Integer(parseNumber<Int64>(wholeString))
+
+      let result = parseNumber<double>(wholeString)
+
+      if fractionString.length > 0
+        result += parseNumber<double>(fractionString) / power<double>(10, fractionString.length)
+
+      if exponentString.length > 0
+        result *= power<double>(10, parseNumber<double>(exponentString))
+
+      return new* YAML.FloatingPoint(result)
+    },
+  )
+}
+
+export function coreSchemaFactory(): Vector<Processor> {
+  let schema = jsonSchemaFactory()
+  # advanced null
+  schema.push((content: String) => YAML.NodeBox? {
+    if content.length == 0 || content == "Null" || content == "NULL" || content == "~"
+      return new* YAML.Null
+    return null
+  })
+  # advanced boolean
+  schema.push((content: String) => YAML.NodeBox? {
+    if content == "True" || content == "TRUE"
+      return new* YAML.Boolean(true)
+    else if content == "False" || content == "FALSE"
+      return new* YAML.Boolean(false)
+    return null
+  })
+  # advanced integer
+  schema.push((content: String) => YAML.NodeBox? {
+    if content.length < 3
+      return null
+    if content[0] != '0'
+      return null
+    if content[1] != 'o' && content[1] != 'x'
+      return null
+    let rest = content.substring(from: 2)
+    if content[1] == 'o' {
+      if rest.includes((char: CodePoint) => bool { return !(char >= '0' && char <= '7') })
+        return null
+      return new* YAML.Integer(parseNumber<Int64>(rest, 8))
+    } else if content[1] == 'x' {
+      if rest.includes((char: CodePoint) => bool { return !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) })
+        return null
+      return new* YAML.Integer(parseNumber<Int64>(rest, 16))
+    }
+    # impossible, but let's keep the compiler happy
+    return null
+  })
+  # advanced floating point
+  schema.push((content: String) => YAML.NodeBox? {
+    if content == ".Inf" || content == ".INF" || content == "+.Inf" || content == "+.INF"
+      return new* YAML.FloatingPoint(INFINITY)
+    else if content == "-.Inf" || content == "-.INF"
+      return new* YAML.FloatingPoint(-INFINITY)
+    else if content == ".NaN" || content == ".NAN"
+      return new* YAML.FloatingPoint(NAN)
+    return null
+  })
+  return schema
+}

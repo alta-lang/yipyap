@@ -12,6 +12,7 @@ import "chars.alta" as YAMLChars
 import Map from "map"
 import TagResolver from "tags.alta"
 import Box from "memory"
+import "schemas.alta" as Schemas
 
 ##define DEBUG true
 
@@ -104,6 +105,7 @@ class Level {
   public var anchorFor: String = ""
   public var columnOfLastToken: Size = 0
   public var associatedTag: String = ""
+  public var columnOfParent: Size? = null
 
   public constructor() {}
   public constructor(rule: Rule) {
@@ -136,6 +138,7 @@ export class Parser {
   private var currentColumn: Size = 0
 
   public var tagResolver = new Box<TagResolver>(new* TagResolver)
+  public var schema = Schemas.coreSchemaFactory()
 
   public function feed(input: String): void {
     this.input += input
@@ -149,7 +152,9 @@ export class Parser {
     this.parse()
   }
 
-  private function process(string: ref YAML.String): void {
+  private function process(node: ref YAML.NodeBox): void {
+    let string = (node as ref YAML.Node) as ref YAML.String
+
     let trim = () => void {
       let newStr: String
       let start: Size = 0
@@ -161,9 +166,9 @@ export class Parser {
       string = string.substring(from: start, to: end)
     }
 
-    if string.length < 2
-      return trim()
-    if string[0] == '"' {
+    if string.length > 1 && string[0] == '"' {
+      if string.tag == "?"
+        string._tag("tag:yaml.org,2002:str")
       trim()
       let newStr: String
       let firstNewlineFound = false
@@ -194,7 +199,9 @@ export class Parser {
         }
       }
       string = unescape(newStr.substring(from: 1, to: newStr.length - 1))
-    } else if string[0] == '\'' {
+    } else if string.length > 1 && string[0] == '\'' {
+      if string.tag == "?"
+        string._tag("tag:yaml.org,2002:str")
       trim()
       let newStr: String
       let firstNewlineFound = false
@@ -224,7 +231,9 @@ export class Parser {
         }
       }
       string = newStr.substring(from: 1, to: newStr.length - 1)
-    } else if string[0] == '|' || string[0] == '>' {
+    } else if string.length > 1 && (string[0] == '|' || string[0] == '>') {
+      if string.tag == "?"
+        string._tag("tag:yaml.org,2002:str")
       let i: Size = 1
       if string.length > i && (string[i] == '+' || string[i] == '-')
         i += 1
@@ -293,7 +302,21 @@ export class Parser {
         string = newStr
       }
     } else {
+      # it's a plain scalar
       trim()
+      # if it's an unspecified tag, try to parse it
+      if string.tag == "?" {
+        for processor: Schemas.Processor in this.schema.items {
+          if let processed = processor(string) {
+            node = *processed
+            ;(node as ref YAML.Node).tagResolver = this.tagResolver
+            break
+          }
+        }
+        if (node as ref YAML.Node).tag == "?" {
+          (node as ref YAML.Node)._tag("tag:yaml.org,2002:str")
+        }
+      }
     }
   }
 
@@ -501,7 +524,7 @@ export class Parser {
           }
         } else if checkingForArray {
           checkingForArray = false
-          if char == ' ' {
+          if char == ' ' || char == '\n' {
             unprocessed.value = unprocessed.value.substring(length: unprocessed.value.length - 1)
             pushUnprocessed()
             unprocessed.column = this.currentColumn + 1
@@ -731,18 +754,27 @@ export class Parser {
         if level.handedOff {
           level.handedOff = false
           let tmp: String
-          if lastNode
-            tmp = (lastNode as ref YAML.Node).toString()
-          else
-            tmp = new String("<unknown>")
+          if !lastNode {
+            lastNode = new* YAML.String("")
+            ;(lastNode as ref YAML.Node)._tag("?")
+          }
+          tmp = (lastNode as ref YAML.Node).toString()
           if (lastNode as ref YAML.Node) instanceof YAML.String
-            this.process(lastNode as ref YAML.String)
+            this.process(lastNode)
           if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
             if level.gettingKey {
               level.gettingKey = false
               level.cache.push(lastNode)
             } else {
-              ;(level.node as ref YAML.Mapping)[level.cache.pop()] = lastNode
+              let key: YAML.NodeBox = nullptr
+              if level.cache.length > 0 {
+                key = level.cache.pop()
+              } else {
+                key = new* YAML.String("")
+                ;(key as ref YAML.Node)._tag("?")
+                this.process(key)
+              }
+              ;(level.node as ref YAML.Mapping)[key] = lastNode
             }
           } else if level.rule == Rule.Sequence || level.rule == Rule.FlowSequence {
             (level.node as ref YAML.Sequence).push(lastNode)
@@ -803,11 +835,16 @@ export class Parser {
           levels.push(new Level(Rule.Expression))
           goToNextToken = false
         } else if token.type == TokenType.Scalar || token.type == TokenType.Any {
-          if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
+          if level.columnOfParent && token.column <= *level.columnOfParent && level.rule != Rule.FlowMapping && level.rule != Rule.FlowSequence && level.state == 1 {
+            lastNode = level.node
+            levels.pop()
+            goToNextToken = false
+          } else if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
             let str = new* YAML.String(token)
+            str._tag("?")
             str.tagResolver = this.tagResolver
             level.cache.push(str)
-            this.process(level.cache.last as ref YAML.String)
+            this.process(level.cache.last)
           } else {
             let first = false
             if level.node {
@@ -820,6 +857,7 @@ export class Parser {
               first = true
               level.rule = Rule.Scalar
               level.node = new* YAML.String
+              ;(level.node as ref YAML.Node)._tag("?")
               ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
               if level.associatedTag {
                 (level.node as ref YAML.Node)._tag(level.associatedTag)
@@ -852,7 +890,10 @@ export class Parser {
               goToNextToken = false
             } else {
               let reassignRoot = this.root == level.node
-              level.cache.push(level.node as ref YAML.String)
+              if level.node {
+                level.cache.push(level.node as ref YAML.String)
+                this.process(level.cache.last)
+              }
               level.node = new* YAML.Mapping
               ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
               if level.associatedTag {
@@ -868,6 +909,7 @@ export class Parser {
           if goToNextToken {
             level.handedOff = true
             levels.push(new Level(Rule.Expression))
+            levels.top.columnOfParent = level.rootIndent
             if level.rule == Rule.FlowMapping
               levels.top.noBlock = true
           }
@@ -978,6 +1020,6 @@ export class Parser {
     }
 
     if this.root && (this.root as ref YAML.Node) instanceof YAML.String
-      this.process(this.root as ref YAML.String)
+      this.process(this.root)
   }
 }

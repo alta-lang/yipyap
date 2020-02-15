@@ -2,10 +2,10 @@ import Map from "map"
 import Vector from "vector"
 import String as AltaString from "string"
 import Box from "memory"
-import Size from "types"
+import Size, Int64 from "types"
 import escape from "util.alta"
 import TagResolver from "tags.alta"
-import Pair from "util"
+import Pair, numberToString, floatingPointToString from "util"
 
 function spacesFor(indent: Size): AltaString {
   let result: AltaString
@@ -23,7 +23,9 @@ export class Node {
 
   # TODO: make this a write accessor once they're added to Alta
   public function _tag(tag: AltaString): void {
-    if tag != this.defaultTag
+    if tag == this.defaultTag
+      this.currentTag = null
+    else
       this.currentTag = tag
   }
 
@@ -207,13 +209,8 @@ export class String extends Node, AltaString {
   protected @override function equals(other: ref Node): bool {
     if !(other instanceof String)
       return false
-
     let that = other as ref String
-
-    if (this as AltaString) != (that as AltaString)
-      return false
-
-    return true
+    return this as AltaString == that as AltaString
   }
   public @override function toString(indent: Size): AltaString {
     return this.cannonicalTag + " \"" + escape(super<AltaString>) + '\"'
@@ -239,5 +236,92 @@ export class Alias extends Node {
     # in the future, though, the target will be properly named
     # and we'll simply return an anchor
     return (this.target as ref Node).toString(indent)
+  }
+}
+
+export class Null extends Node {
+  protected @override @read function defaultTag(): AltaString {
+    return "tag:yaml.org,2002:null"
+  }
+  protected @override function equals(other: ref Node): bool {
+    return other instanceof Null
+  }
+  public @override function toString(indent: Size): AltaString {
+    return this.cannonicalTag + " null"
+  }
+}
+
+export class Boolean extends Node {
+  private var value: bool = false
+
+  public constructor(value: bool) {
+    this.value = value
+  }
+
+  public to bool {
+    return this.value
+  }
+
+  protected @override @read function defaultTag(): AltaString {
+    return "tag:yaml.org,2002:bool"
+  }
+  protected @override function equals(other: ref Node): bool {
+    if !(other instanceof Boolean)
+      return false
+    let that = other as ref Boolean
+    return this as bool == that as bool
+  }
+  public @override function toString(indent: Size): AltaString {
+    return this.cannonicalTag + ' ' + (this.value ? "true" : "false")
+  }
+}
+
+export class Integer extends Node {
+  private var value: Int64 = 0
+
+  public constructor(value: Int64) {
+    this.value = value
+  }
+
+  public to Int64 {
+    return this.value
+  }
+
+  protected @override @read function defaultTag(): AltaString {
+    return "tag:yaml.org,2002:int"
+  }
+  protected @override function equals(other: ref Node): bool {
+    if !(other instanceof Integer)
+      return false
+    let that = other as ref Integer
+    return this as Int64 == that as Int64
+  }
+  public @override function toString(indent: Size): AltaString {
+    return this.cannonicalTag + ' ' + numberToString<Int64>(this.value)
+  }
+}
+
+export class FloatingPoint extends Node {
+  private var value: double = 0.0
+
+  public constructor(value: double) {
+    this.value = value
+  }
+
+  public to double {
+    return this.value
+  }
+
+  protected @override @read function defaultTag(): AltaString {
+    return "tag:yaml.org,2002:float"
+  }
+  protected @override function equals(other: ref Node): bool {
+    if !(other instanceof FloatingPoint)
+      return false
+    let that = other as ref FloatingPoint
+    return this as double == that as double
+  }
+  public @override function toString(indent: Size): AltaString {
+    return this.cannonicalTag + ' ' + floatingPointToString<double>(this.value)
   }
 }
