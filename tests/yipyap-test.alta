@@ -18,12 +18,14 @@ literal function main(argc: int, argv: ptr ptr byte): int {
   parser.feed(input)
   parser.finish()
 
-  printLine("---")
-
-  if parser.root
-    printLine((parser.root as ref yipyap.Node).toString())
-  else
+  if parser.roots.length == 0
     printLine("No root node generated")
+
+  for root: yipyap.NodeBox in parser.roots.items {
+    printLine("---")
+    printLine((root as ref yipyap.Node).toString())
+    printLine("...")
+  }
 
   return 0
 }

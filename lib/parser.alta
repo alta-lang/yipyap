@@ -1,6 +1,5 @@
 import String, CodePoint from "string"
 import Size, SizeMaximum from "types"
-import printLine from "io"
 import Stack from "stack"
 import List from "list"
 import Exception from "exceptions"
@@ -14,7 +13,9 @@ import TagResolver from "tags.alta"
 import Box from "memory"
 import "schemas.alta" as Schemas
 
-##define DEBUG true
+##if YIPYAP_DEBUG
+import printLine from "io"
+##end if
 
 export class MisalignedIndentation extends Exception {}
 export class InvalidCharacter extends Exception {}
@@ -24,6 +25,11 @@ export class InvalidBlockSequenceLocation extends Exception {}
 export class UnexpectedToken extends Exception {}
 export class UndefinedAlias extends Exception {}
 export class UnresolvedHandle extends Exception {}
+export class MultipleDocumentStartsFound extends Exception {}
+export class PrematureDocumentEndFound extends Exception {}
+export class ExpectedDocumentStart extends Exception {}
+export class IncompatibleVersion extends Exception {}
+export class MultipleVersionDirectivesFound extends Exception {}
 
 enum TokenType: Size {
   Any,
@@ -41,6 +47,9 @@ enum TokenType: Size {
   AnchorName,
   AliasName,
   TagName,
+  DocumentStartMarker,
+  DocumentEndMarker,
+  Directive,
   EOF,
 }
 
@@ -132,7 +141,8 @@ export class Parser {
   private var input: String
   private var tokens: List<Token>
 
-  public var root: YAML.NodeBox = nullptr
+  public var roots = new Vector<YAML.NodeBox>
+  private var root: ptr YAML.NodeBox = nullptr
 
   private var currentLine: Size = 0
   private var currentColumn: Size = 0
@@ -338,6 +348,9 @@ export class Parser {
         # handle `!!my-thing`
         return tagger.secondaryNamespace + rest
       }
+    } else if tagger.primaryNamespace != "!" {
+      # handle non-default primary namespaces
+      return tagger.primaryNamespace + tag
     }
     return tag
   }
@@ -369,6 +382,9 @@ export class Parser {
     let inAnchorOrAliasName = false
     let inTagName = false
     let inTagHandle = false
+    let inDirective = false
+    let checkingForDocumentEnd = false
+    let checkingForDocumentStart = false
 
     let pushToken = (token: Token) => void {
       this.tokens.pushBack(token)
@@ -457,6 +473,13 @@ export class Parser {
         if inComment {
           if char == '\n'
             inComment = false
+        } else if inDirective {
+          if char == '\n' {
+            pushUnprocessed()
+            inDirective = false
+          } else {
+            unprocessed += char
+          }
         }
         if inBlockScalar {
           if startingBlockScalar {
@@ -479,7 +502,7 @@ export class Parser {
         }
         let flowBoundary = (!lastTok || ((*lastTok).type != TokenType.Any) || (*lastTok).line != this.currentLine) && flowCollectionCount > 0
         let atBoundary = (!lastTok || ((*lastTok).type != TokenType.Any) || (*lastTok).line != this.currentLine) && unprocessed.value.length == 0
-        if inComment {
+        if inComment || inDirective {
           # do nothing
         } else if inDoubleQuotedString {
           unprocessed += char
@@ -539,6 +562,9 @@ export class Parser {
             }
             pushToken(new Token(TokenType.SequenceIndicator, this.currentLine, this.currentColumn - 1))
             ignoringWhitespace = true
+          } else if this.currentColumn == 1 && char == '-' {
+            checkingForDocumentStart = true
+            unprocessed += char
           } else {
             unprocessed += char
           }
@@ -566,6 +592,31 @@ export class Parser {
             ignoringWhitespace = true
           } else {
             unprocessed += char
+          }
+        } else if checkingForDocumentStart {
+          checkingForDocumentStart = false
+          unprocessed += char
+          if char == '-' {
+            checkIndents = true
+            unprocessed.type = TokenType.DocumentStartMarker
+            pushUnprocessed()
+            while indents.length > 0
+              indents.pop()
+          }
+        } else if checkingForDocumentEnd {
+          checkingForDocumentEnd = false
+          unprocessed += char
+          if this.currentColumn == 1 {
+            if char == '.'
+              checkingForDocumentEnd = true
+          } else {
+            if char == '.' {
+              checkIndents = false
+              unprocessed.type = TokenType.DocumentEndMarker
+              pushUnprocessed()
+              while indents.length > 0
+                indents.pop()
+            }
           }
         } else if char == '\n' {
           pushUnprocessed()
@@ -655,6 +706,13 @@ export class Parser {
           inTagName = true
           inTagHandle = true
           unprocessed.type = TokenType.TagName
+        } else if this.currentColumn == 0 && char == '%' {
+          pushUnprocessed()
+          inDirective = true
+          unprocessed.type = TokenType.Directive
+        } else if this.currentColumn == 0 && char == '.' {
+          pushUnprocessed()
+          checkingForDocumentEnd = true
         } else {
           unprocessed += char
         }
@@ -688,11 +746,47 @@ export class Parser {
     let lastNode: YAML.NodeBox = nullptr
     let tok = it.next()
     let anchors = new Map<String, YAML.NodeBox>
+    let foundDirectives = false
+    let foundStartMarker = false
+    let startingDocument = true
+    let foundVersion = false
+
+    let handleHandedOff = (level: ref Level) => void {
+      let tmp: String
+      if !lastNode {
+        lastNode = new* YAML.String("")
+        ;(lastNode as ref YAML.Node)._tag("?")
+      }
+      tmp = (lastNode as ref YAML.Node).toString()
+      if (lastNode as ref YAML.Node) instanceof YAML.String
+        this.process(lastNode)
+      if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
+        if level.gettingKey {
+          level.gettingKey = false
+          level.cache.push(lastNode)
+        } else {
+          let key: YAML.NodeBox = nullptr
+          if level.cache.length > 0 {
+            key = level.cache.pop()
+          } else {
+            key = new* YAML.String("")
+            ;(key as ref YAML.Node)._tag("?")
+            this.process(key)
+          }
+          ;(level.node as ref YAML.Mapping)[key] = lastNode
+        }
+      } else if level.rule == Rule.Sequence || level.rule == Rule.FlowSequence {
+        (level.node as ref YAML.Sequence).push(lastNode)
+      }
+      lastNode = nullptr
+      if level.rule == Rule.FlowMapping || level.rule == Rule.FlowSequence
+        level.needsSeparator = true
+    }
 
     while tok {
       let token = *tok
 
-      ##if DEBUG
+      ##if YIPYAP_DEBUG
         if token.type == TokenType.Indent
           printLine("indent token of ", token.value.length, " spaces found at ", token.line + 1, ':', token.column + 1)
         else if token.type == TokenType.Outdent
@@ -723,23 +817,152 @@ export class Parser {
           printLine("alias name (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
         else if token.type == TokenType.TagName
           printLine("tag name (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.Directive
+          printLine("directive (\"", escape(token.value), "\") found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.DocumentStartMarker
+          printLine("document start marker found at ", token.line + 1, ':', token.column + 1)
+        else if token.type == TokenType.DocumentEndMarker
+          printLine("document end marker found at ", token.line + 1, ':', token.column + 1)
         else
           printLine("token found at ", token.line + 1, ':', token.column + 1, " with content: \"", escape(token.value), '"')
       ##end if
 
-      if levels.length == 0 {
-        if token.type != TokenType.EOF
-          throw new UnexpectedExit
-        else
-          break
+      let popAll = () => void {
+        while levels.length > 0 {
+          let level = levels.top
+          if level.handedOff
+            handleHandedOff(level)
+          if level.rule == Rule.Scalar {
+            let str = level.node as ref YAML.String
+            for i: Size in level.lineOfLastToken..token.line {
+              str += '\n'
+            }
+          }
+          lastNode = level.node
+          levels.pop()
+        }
       }
 
-      let level: ref Level = levels.top
-      level.iteration += 1
+      if levels.length == 0 {
+        if token.type != TokenType.EOF && token.type != TokenType.Directive && token.type != TokenType.DocumentStartMarker {
+          if foundDirectives && !foundStartMarker
+            throw new ExpectedDocumentStart
+          throw new UnexpectedExit
+        } else if token.type == TokenType.EOF {
+          break
+        }
+      }
 
       let levelCount = levels.length
 
       let goToNextToken = true
+      let continuePass = true
+
+      if token.type == TokenType.Directive {
+        continuePass = false
+        foundDirectives = true
+        foundStartMarker = false
+        startingDocument = false
+        popAll()
+        # process the directive
+        if token.value.length > 0 {
+          let firstSpace = token.value.indexOf(' ')
+          let command = token.value.substring(from: 0, to: firstSpace)
+          let args = new Vector<String>
+          let argString = token.value.substring(from: firstSpace + 1)
+          let i: Size = 0
+          while i < argString.length {
+            while i < argString.length && argString[i] == ' '
+              i += 1
+            if i == argString.length
+              break
+            args.push("")
+            while i < argString.length && argString[i] != ' ' {
+              args.last += argString[i]
+              i += 1
+            }
+          }
+          if command == "YAML" {
+            if foundVersion
+              throw new MultipleVersionDirectivesFound
+            else
+              foundVersion = true
+            if args.length >= 1 {
+              let versionString = args[0]
+              let ok = true
+              let firstDot = SizeMaximum
+              if ok && versionString.length < 3
+                ok = false
+              if ok && versionString.includes((char: CodePoint) => bool { return !(char >= '0' && char <= '9') && char != '.' })
+                ok = false
+              if ok && versionString[0] == '.'
+                ok = false
+              if ok && (firstDot = versionString.indexOf('.')) == SizeMaximum
+                ok = false
+              if ok && versionString.indexOf('.', after: firstDot) != SizeMaximum
+                ok = false
+              if ok {
+                let major = versionString.substring(from: 0, to: firstDot)
+                let minor = versionString.substring(from: firstDot + 1)
+                if major != "1"
+                  throw new IncompatibleVersion
+                # for now, just ignore minor version
+              }
+            }
+          } else if command == "TAG" {
+            if args.length >= 2 {
+              let tag = args[0]
+              let ok = true
+              if ok && tag.length < 1
+                ok = false
+              if ok && tag[0] != '!'
+                ok = false
+              if ok && tag[tag.length - 1] != '!'
+                ok = false
+              if ok {
+                let tagger = this.tagResolver as ref TagResolver
+                # TODO: right now, we use the same TagResolver instance
+                #       for all documents, meaning that tag handles set in one
+                #       leak into others. fix that.
+                if tag == "!"
+                  tagger.primaryNamespace = args[1]
+                else if tag == "!!"
+                  tagger.secondaryNamespace = args[1]
+                else
+                  tagger.namespaces[tag.substring(from: 1, to: tag.length - 1)] = args[1]
+              }
+            }
+          }
+        }
+      } else if token.type == TokenType.DocumentStartMarker {
+        continuePass = false
+        if foundStartMarker
+          throw new MultipleDocumentStartsFound
+        foundStartMarker = true
+        foundDirectives = false
+        foundVersion = false
+        startingDocument = true
+        this.roots.push(new* YAML.Null)
+        this.root = &this.roots.last
+        levels.push(new Level(Rule.Expression))
+        levels.top.isRoot = true
+        levels.top.state = 2
+      } else if token.type == TokenType.DocumentEndMarker {
+        continuePass = false
+        if !foundStartMarker
+          throw new PrematureDocumentEndFound
+        foundStartMarker = false
+        startingDocument = false
+        popAll()
+      }
+
+      if !continuePass {
+        tok = it.next()
+        continue
+      }
+
+      let level: ref Level = levels.top
+      level.iteration += 1
 
       if level.state == 0 {
         if token.type == TokenType.Indent {
@@ -753,35 +976,7 @@ export class Parser {
       } else {
         if level.handedOff {
           level.handedOff = false
-          let tmp: String
-          if !lastNode {
-            lastNode = new* YAML.String("")
-            ;(lastNode as ref YAML.Node)._tag("?")
-          }
-          tmp = (lastNode as ref YAML.Node).toString()
-          if (lastNode as ref YAML.Node) instanceof YAML.String
-            this.process(lastNode)
-          if level.rule == Rule.Mapping || level.rule == Rule.FlowMapping {
-            if level.gettingKey {
-              level.gettingKey = false
-              level.cache.push(lastNode)
-            } else {
-              let key: YAML.NodeBox = nullptr
-              if level.cache.length > 0 {
-                key = level.cache.pop()
-              } else {
-                key = new* YAML.String("")
-                ;(key as ref YAML.Node)._tag("?")
-                this.process(key)
-              }
-              ;(level.node as ref YAML.Mapping)[key] = lastNode
-            }
-          } else if level.rule == Rule.Sequence || level.rule == Rule.FlowSequence {
-            (level.node as ref YAML.Sequence).push(lastNode)
-          }
-          lastNode = nullptr
-          if level.rule == Rule.FlowMapping || level.rule == Rule.FlowSequence
-            level.needsSeparator = true
+          handleHandedOff(level)
         }
         if token.type == TokenType.ItemSeparator && level.rule != Rule.FlowMapping && level.rule != Rule.FlowSequence {
           lastNode = level.node
@@ -835,7 +1030,13 @@ export class Parser {
           levels.push(new Level(Rule.Expression))
           goToNextToken = false
         } else if token.type == TokenType.Scalar || token.type == TokenType.Any {
-          if level.columnOfParent && token.column <= *level.columnOfParent && level.rule != Rule.FlowMapping && level.rule != Rule.FlowSequence && level.state == 1 {
+          if (
+            level.columnOfParent &&
+            token.column <= *level.columnOfParent &&
+            level.rule != Rule.FlowMapping &&
+            level.rule != Rule.FlowSequence &&
+            level.state == 1
+          ) {
             lastNode = level.node
             levels.pop()
             goToNextToken = false
@@ -889,7 +1090,7 @@ export class Parser {
               levels.pop()
               goToNextToken = false
             } else {
-              let reassignRoot = this.root == level.node
+              let reassignRoot = *this.root == level.node
               if level.node {
                 level.cache.push(level.node as ref YAML.String)
                 this.process(level.cache.last)
@@ -901,8 +1102,9 @@ export class Parser {
               }
               if level.anchorFor
                 anchors[level.anchorFor] = level.node
-              if reassignRoot
-                this.root = level.node
+              if reassignRoot {
+                *this.root = level.node
+              }
               level.rule = Rule.Mapping
             }
           }
@@ -918,7 +1120,7 @@ export class Parser {
             throw new InvalidBlockSequenceLocation
           }
           if level.rule == Rule.Expression {
-            let reassignRoot = this.root == level.node
+            let reassignRoot = *this.root == level.node
             level.node = new* YAML.Sequence
             ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
             if level.associatedTag {
@@ -926,8 +1128,9 @@ export class Parser {
             }
             if level.anchorFor
               anchors[level.anchorFor] = level.node
-            if reassignRoot
-              this.root = level.node
+            if reassignRoot {
+              *this.root = level.node
+            }
             level.rule = Rule.Sequence
           } else if level.rule != Rule.Sequence {
             goToNextToken = false
@@ -970,7 +1173,7 @@ export class Parser {
             anchors[level.anchorFor] = level.node
         } else if token.type == TokenType.ComplexKeyIndicator {
           if level.rule == Rule.Expression {
-            let reassignRoot = this.root == level.node
+            let reassignRoot = *this.root == level.node
             level.node = new* YAML.Mapping
             ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
             if level.associatedTag {
@@ -978,8 +1181,9 @@ export class Parser {
             }
             if level.anchorFor
               anchors[level.anchorFor] = level.node
-            if reassignRoot
-              this.root = level.node
+            if reassignRoot {
+              *this.root = level.node
+            }
             level.rule = Rule.Mapping
           } else if level.rule != Rule.Mapping && level.rule != Rule.FlowMapping {
             lastNode = level.node
@@ -1015,11 +1219,20 @@ export class Parser {
       if goToNextToken
         tok = it.next()
 
-      if levelCount == levels.length && !this.root && level.node
-        this.root = level.node
+      if (
+        levelCount == levels.length &&
+        this.root &&
+        (
+          !*this.root ||
+          (*this.root as ref YAML.Node) instanceof YAML.Null
+        ) &&
+        level.node
+      ) {
+        *this.root = level.node
+      }
     }
 
-    if this.root && (this.root as ref YAML.Node) instanceof YAML.String
-      this.process(this.root)
+    if this.root && *this.root && (*this.root as ref YAML.Node) instanceof YAML.String
+      this.process(*this.root)
   }
 }
