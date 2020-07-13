@@ -13,6 +13,8 @@ import TagResolver from "tags.alta"
 import Box from "memory"
 import "schemas.alta" as Schemas
 
+##define YIPYAP_DEBUG true
+
 ##if YIPYAP_DEBUG
 import printLine from "io"
 ##end if
@@ -1090,7 +1092,7 @@ export class Parser {
               levels.pop()
               goToNextToken = false
             } else {
-              let reassignRoot = *this.root == level.node
+              let reassignRoot = !this.root || *this.root == level.node
               if level.node {
                 level.cache.push(level.node as ref YAML.String)
                 this.process(level.cache.last)
@@ -1103,24 +1105,30 @@ export class Parser {
               if level.anchorFor
                 anchors[level.anchorFor] = level.node
               if reassignRoot {
-                *this.root = level.node
+                if this.root {
+                  *this.root = level.node
+                } else {
+                  this.roots.push(level.node)
+                  this.root = &this.roots.last
+                }
               }
               level.rule = Rule.Mapping
             }
           }
           if goToNextToken {
             level.handedOff = true
+            let indent = level.rootIndent
+            let noBlock = level.rule == Rule.FlowMapping
             levels.push(new Level(Rule.Expression))
-            levels.top.columnOfParent = level.rootIndent
-            if level.rule == Rule.FlowMapping
-              levels.top.noBlock = true
+            levels.top.columnOfParent = indent
+            levels.top.noBlock = noBlock
           }
         } else if token.type == TokenType.SequenceIndicator {
           if level.noBlock {
             throw new InvalidBlockSequenceLocation
           }
           if level.rule == Rule.Expression {
-            let reassignRoot = *this.root == level.node
+            let reassignRoot = !this.root || *this.root == level.node
             level.node = new* YAML.Sequence
             ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
             if level.associatedTag {
@@ -1129,7 +1137,12 @@ export class Parser {
             if level.anchorFor
               anchors[level.anchorFor] = level.node
             if reassignRoot {
-              *this.root = level.node
+              if this.root {
+                *this.root = level.node
+              } else {
+                this.roots.push(level.node)
+                this.root = &this.roots.last
+              }
             }
             level.rule = Rule.Sequence
           } else if level.rule != Rule.Sequence {
@@ -1173,7 +1186,7 @@ export class Parser {
             anchors[level.anchorFor] = level.node
         } else if token.type == TokenType.ComplexKeyIndicator {
           if level.rule == Rule.Expression {
-            let reassignRoot = *this.root == level.node
+            let reassignRoot = !this.root || *this.root == level.node
             level.node = new* YAML.Mapping
             ;(level.node as ref YAML.Node).tagResolver = this.tagResolver
             if level.associatedTag {
@@ -1182,7 +1195,12 @@ export class Parser {
             if level.anchorFor
               anchors[level.anchorFor] = level.node
             if reassignRoot {
-              *this.root = level.node
+              if this.root {
+                *this.root = level.node
+              } else {
+                this.roots.push(level.node)
+                this.root = &this.roots.last
+              }
             }
             level.rule = Rule.Mapping
           } else if level.rule != Rule.Mapping && level.rule != Rule.FlowMapping {
